@@ -1,0 +1,39 @@
+{
+  "name": "hours-cal",
+  "private": true,
+  "version": "1.0.0",
+  "description": "מערכת לניהול נוכחות וחישוב שעות עבודה ושעות נוספות",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc -b --noEmit",
+    "tauri": "tauri"
+  },
+  "dependencies": {
+    "@fontsource/heebo": "^5.3.0",
+    "@hebcal/core": "^6.14.1",
+    "@tauri-apps/api": "^2.12.1",
+    "@tauri-apps/plugin-dialog": "^2.8.1",
+    "exceljs": "^4.4.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "sql.js": "^1.14.2"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.3.3",
+    "@tauri-apps/cli": "^2.12.1",
+    "@types/node": "^22.20.5",
+    "@types/react": "^18.3.31",
+    "@types/react-dom": "^18.3.7",
+    "@types/sql.js": "^1.4.11",
+    "@vitejs/plugin-react": "^4.7.0",
+    "tailwindcss": "^4.3.3",
+    "typescript": "5.8",
+    "vite": "^6.4.4",
+    "vitest": "^3.2.7"
+  }
+}
