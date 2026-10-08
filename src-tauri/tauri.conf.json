@@ -32,7 +32,7 @@
     "shortDescription": "מערכת לניהול נוכחות וחישוב שעות עבודה ושעות נוספות",
     "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.ico"],
     "windows": {
-      "webviewInstallMode": { "type": "embedBootstrapper" },
+      "webviewInstallMode": { "type": "downloadBootstrapper", "silent": true },
       "nsis": { "languages": ["Hebrew", "English"], "displayLanguageSelector": false, "installMode": "currentUser" }
     }
   }

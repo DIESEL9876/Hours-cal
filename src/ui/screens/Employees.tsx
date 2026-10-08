@@ -453,7 +453,7 @@ function HolidaysModal({ businessId, onClose }: { businessId: string; onClose: (
         {list.map((h) => (
           <div key={h.date} className="flex items-center justify-between px-4 py-2.5 text-[14px]">
             <span>
-              <span className="num me-3 text-ink-soft">{formatDateHe(h.date)}</span>
+              <span className="num ml-3 text-ink-soft">{formatDateHe(h.date)}</span>
               {h.name}
             </span>
             <Button

@@ -362,7 +362,7 @@ function EmployeeDetail({ row, onOpen }: { row: BusinessSummaryRow; onOpen: () =
             <li key={i} className="flex items-start gap-2">
               <Badge tone={severityTone[w.severity]}>{severityLabel[w.severity]}</Badge>
               <span>
-                {w.date && <span className="num me-1 text-ink-soft">{formatDateHe(w.date).slice(0, 5)}</span>}
+                {w.date && <span className="num ml-1.5 text-ink-soft">{formatDateHe(w.date).slice(0, 5)}</span>}
                 {w.message}
               </span>
             </li>
