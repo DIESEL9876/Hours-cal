@@ -38,6 +38,15 @@ src/ui/          React screens: businesses → employees → attendance editor, 
 src-tauri/       Rust shell: rusqlite (bundled SQLite, WAL, synchronous=FULL), backups (VACUUM INTO), restore
 ```
 
+Daily overtime thresholds (net of confirmed unpaid breaks; weekly regular cap 42:00 in both schedules):
+
+| Schedule | Ordinary day | Shortened day | Friday / eve of rest, holiday eve, night shift |
+|---|---|---|---|
+| Five-day | **8:24** — office policy (8.4 decimal), more favourable than the statutory 8:36 | 7:36 (statutory, preserved) | 7:00 |
+| Six-day | 8:00 | — | 7:00 |
+
+Overtime: first two hours of the day 125%, then 150%; weekly rest / holiday 150 / 175 / 200%.
+
 Calculation order per shift (never changed): validate → gross → break rule → deductible break → validate break →
 net → daily threshold → weekly classification (no double counting) → explanation. Every net minute lands in
 exactly one bucket and `sum(buckets) === net` is asserted at runtime.
@@ -86,7 +95,8 @@ npm run test:rust          # Rust storage layer (needs webkit2gtk dev libs on Li
 - **Engine:** the 15 mandatory scenarios plus extended cases: leap years, month lengths, DST, minute boundaries,
   night work, holidays, eves, weekly rest, breaks, compliance warnings, profiles, tiering modes, pay rounding, report
   consistency, and 40 randomized property tests (reconciliation, determinism, month-split consistency).
-  Mutation checks confirmed that the suite fails if the 8:36 threshold is changed or the weekly accumulator is reset
+  Mutation checks confirmed that the suite fails if the five-day threshold is changed (8:24 office policy), if the
+  statutory 7:36 shortened day is not preserved, or if the weekly accumulator is reset
   at month start.
 - **Storage:** migrations, business isolation, unique employee numbers, settings history and retroactive
   authorisation, audit trail, atomic rollback, persistence across reopen, backup/restore, finalisation snapshots.

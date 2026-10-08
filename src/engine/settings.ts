@@ -33,6 +33,17 @@ export const LAW = {
   MAX_SHIFT_MINUTES: 16 * 60,
 } as const;
 
+/**
+ * Office calculation policy (requested by the office — not a statutory rule).
+ * Applied only where it is at least as favourable to the employee as the statute: the engine always takes
+ * the LOWER of the office threshold and the statutory threshold, so the designated 7:36 shortened day and the
+ * 7-hour night / eve-of-rest / holiday-eve thresholds are preserved.
+ */
+export const OFFICE_POLICY = {
+  /** Five-day week: daily overtime threshold of 8.4 decimal hours = exactly 8:24 on every working day. */
+  FIVE_DAY_DAILY_MINUTES: 8 * 60 + 24,
+} as const;
+
 export const DEFAULT_COMPANY_BREAK_POLICY: CompanyBreakPolicy = {
   thresholdMinutes: 600,
   shortBreakMinutes: 30,

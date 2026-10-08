@@ -31,7 +31,7 @@ import type {
 } from './types';
 import { CalendarContext, type Interval } from './calendar';
 import { calculateDeductibleBreakMinutes, calculateNetWorkedMinutes } from './breaks';
-import { LAW, resolveSettings } from './settings';
+import { LAW, OFFICE_POLICY, resolveSettings } from './settings';
 import {
   addDays,
   eachDate,
@@ -177,18 +177,27 @@ export function getApplicableDailyThreshold(
     reasons.push(`תקן הסכמי (${cp.label}): ${formatDurationHe(base)}`);
   } else if (settings.workweek === 'five') {
     info.weeklyMinutes = LAW.WEEKLY_REGULAR_MINUTES;
-    if (scheduled && settings.shortDay === wd) {
-      base = LAW.FIVE_DAY_SHORT_MINUTES;
-      info.shortDay = true;
-      reasons.push('שבוע עבודה בן 5 ימים – היום המקוצר: 7 שעות ו-36 דקות');
-    } else {
-      base = LAW.FIVE_DAY_NORMAL_MINUTES;
+    // Office policy 8:24, but never less favourable than the statute (8:36 normal day / 7:36 shortened day).
+    const office = OFFICE_POLICY.FIVE_DAY_DAILY_MINUTES;
+    const isShort = scheduled && settings.shortDay === wd;
+    const statutory = isShort ? LAW.FIVE_DAY_SHORT_MINUTES : LAW.FIVE_DAY_NORMAL_MINUTES;
+    base = Math.min(office, statutory);
+    info.shortDay = isShort;
+    const officeHe = formatDurationHe(office);
+    const statHe = formatDurationHe(statutory);
+    if (isShort)
       reasons.push(
-        scheduled
-          ? 'שבוע עבודה בן 5 ימים – יום רגיל: 8 שעות ו-36 דקות'
-          : 'יום שאינו יום עבודה רגיל בשבוע בן 5 ימים – נבדק לפי תקן יום רגיל ובכפוף לתקן השבועי',
+        base === statutory
+          ? `שבוע עבודה בן 5 ימים – היום המקוצר: ${statHe} (התקן החוקי, מיטיב ממדיניות המשרד של ${officeHe})`
+          : `שבוע עבודה בן 5 ימים – היום המקוצר: ${officeHe} (מדיניות המשרד, מיטיבה מהתקן החוקי של ${statHe})`,
       );
-    }
+    else if (scheduled)
+      reasons.push(
+        base === office
+          ? `שבוע עבודה בן 5 ימים – תקן יומי לפי מדיניות המשרד: ${officeHe} (מיטיב מהתקן החוקי של ${statHe})`
+          : `שבוע עבודה בן 5 ימים – יום רגיל: ${statHe} (התקן החוקי)`,
+      );
+    else reasons.push(`יום שאינו יום עבודה רגיל בשבוע בן 5 ימים – נבדק לפי תקן של ${formatDurationHe(base)} ובכפוף לתקן השבועי`);
   } else {
     info.weeklyMinutes = LAW.WEEKLY_REGULAR_MINUTES;
     base = LAW.SIX_DAY_NORMAL_MINUTES;

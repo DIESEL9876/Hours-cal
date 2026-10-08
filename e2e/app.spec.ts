@@ -48,17 +48,17 @@ test('full workflow: business → employee → attendance → summary → export
   // 31 rows for October
   await expect(page.locator('tr[data-testid^="day-"]')).toHaveCount(31);
 
-  // --- Test 1 scenario through the UI: 08:00–18:00, company break 30 → 9:30 net, 0:54 at 125% ---------
+  // --- Test 1 scenario through the UI: 08:00–18:00, company break 30 → 9:30 net, threshold 8:24, 1:06 at 125% ---------
   await enterShift(page, '2026-10-11', '0800', '1800');
   const row11 = page.getByTestId('day-2026-10-11');
   await expect(row11).toContainText('9:30');
-  await expect(row11).toContainText('8:36');
-  await expect(row11).toContainText('0:54');
+  await expect(row11).toContainText('8:24');
+  await expect(row11).toContainText('1:06');
   await expect(page.getByTestId('total-net')).toHaveText('9:30');
 
   // explanation in the details drawer
   await page.getByTestId('details-2026-10-11').click();
-  await expect(page.getByTestId('explanation')).toContainText('תקן היום הוא 8 שעות ו-36 דקות, ולכן חושבו 54 דקות נוספות בתעריף 125%.');
+  await expect(page.getByTestId('explanation')).toContainText('תקן היום הוא 8 שעות ו-24 דקות, ולכן חושבו שעה ו-6 דקות נוספות בתעריף 125%.');
   await page.keyboard.press('Escape');
 
   // --- overnight shift and shortened day ----------------------------------
@@ -128,6 +128,7 @@ test('full workflow: business → employee → attendance → summary → export
   await wb.xlsx.readFile((await (await xlsxDl).path())!);
   const ws = wb.getWorksheet('סיכום')!;
   expect(ws.views[0].rightToLeft).toBe(true);
+  expect(String(ws.getCell('A2').value)).toContain('5 ימים 8:24 (מדיניות המשרד)');
   // ExcelJS reads [h]:mm cells back as Dates; convert from the Excel serial (epoch 1899-12-30).
   const minutesOf = (v: unknown) => Math.round((v instanceof Date ? (v.getTime() - Date.UTC(1899, 11, 30)) / 86_400_000 : (v as number)) * 1440);
   const headerRow = ws.getRow(4);

@@ -1,7 +1,8 @@
 # Legal calculation rules — documented basis
 
 **Document date:** 2026-10-08
-**Applies to engine version:** 1.0.0 (`src/engine/`)
+**Applies to engine version:** 1.1.0 (`src/engine/`)
+**Change log:** 1.1.0 (2026-10-08) — office policy: five-day daily threshold 8:24 (rule 3.3).
 **Status:** rules cross-checked against secondary sources only — see "Verification status" below.
 
 This file documents every rule the calculation engine applies, where it comes from, how confident we are,
@@ -59,10 +60,10 @@ Special industries (security, hospitality, health, transport, agriculture …) m
 |---|---|---|---|
 | 3.1 | Full-time weekly regular hours: **42** (extension order, from 1.4.2018; previously 43). | `LAW.WEEKLY_REGULAR_MINUTES = 2520` | S |
 | 3.2 | Five-day week: **four days of 8.6 decimal hours = 8:36**, and **one fixed shortened day of 7.6 = 7:36**, chosen by the employer; the hour may not be spread over several days. Hours are net of breaks unless agreed otherwise. | `FIVE_DAY_NORMAL_MINUTES = 516`, `FIVE_DAY_SHORT_MINUTES = 456` | S |
-| 3.3 | 8.4 decimal hours (8:24) is **never** used as a daily threshold (tested). | — | S |
+| 3.3 | **Office policy (five-day week):** daily overtime threshold of **8.4 decimal hours = exactly 8:24** on every working day, requested by the office. It is more favourable to the employee than the statutory 8:36, so overtime starts earlier. The engine applies `min(office policy, statutory threshold)`: the designated shortened day keeps the statutory **7:36**, and the 7-hour night / eve-of-rest / holiday-eve thresholds (3.5) still apply on top. The 42-hour weekly cap is unchanged. Weekly arithmetic: 4 × 8:24 + 7:36 = 41:12, so up to 0:48 more regular time may fall on another day before weekly overtime starts. Custom-contract profiles are not affected. | `OFFICE_POLICY.FIVE_DAY_DAILY_MINUTES = 504` | O |
 | 3.4 | Six-day week: Sunday–Thursday **8:00**, Friday **7:00**; weekly cap 42 (so 8×6 ≠ 48 regular hours). | `SIX_DAY_NORMAL_MINUTES = 480`, `SEVEN_HOUR_DAY_MINUTES = 420` | S |
 | 3.5 | Statute s.2: on night work, on the day before the weekly rest, and on the eve of a holiday the employee does not work on — a working day does not exceed **7 hours**. Applied as `min(threshold, 7:00)`. | `SEVEN_HOUR_DAY_MINUTES` | S (rule) / **I** (application to five-day arrangements on holiday eves) → `EVE_THRESHOLD_REVIEW` raised whenever the reduction changes the result. |
-| 3.6 | Work on a day that is not a scheduled workday (e.g. Friday in a five-day week) is **not** automatically overtime. It is classified against the day's threshold (Friday = eve of weekly rest → 7:00) and the weekly cap, and flagged `UNSCHEDULED_DAY_WORK` for contractual review. | — | I |
+| 3.6 | Work on a day that is not a scheduled workday (e.g. Friday in a five-day week) is **not** automatically overtime. It is classified against the day's threshold (Friday = eve of weekly rest → 7:00; other unscheduled days in a five-day week → 8:24) and the weekly cap, and flagged `UNSCHEDULED_DAY_WORK` for contractual review. | — | I |
 | 3.7 | Part-time contractual hours: regular minutes beyond the contractual daily hours but within the legal threshold are reported separately as "excess hours at 100%" (`contractExcessMinutes`), never as overtime. | — | O |
 
 ## 4. Overtime

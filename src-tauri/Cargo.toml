@@ -1,6 +1,6 @@
 [package]
 name = "hours-cal"
-version = "1.0.0"
+version = "1.1.0"
 description = "מערכת לניהול נוכחות וחישוב שעות עבודה ושעות נוספות"
 edition = "2021"
 

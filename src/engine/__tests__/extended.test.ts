@@ -60,7 +60,7 @@ describe('calendar arithmetic', () => {
   it('leap-day shift is calculated', () => {
     const r = run({ breakMethod: 'none' }, [sh('2028-02-29', '08:00', '18:00')], '2028-02-01', '2028-02-29');
     expect(day(r, '2028-02-29').netMinutes).toBe(H(10));
-    expect(day(r, '2028-02-29').buckets.ot125).toBe(H(10) - H(8, 36));
+    expect(day(r, '2028-02-29').buckets.ot125).toBe(H(10) - H(8, 24));
   });
 });
 
@@ -118,18 +118,61 @@ describe('minute-accurate boundaries', () => {
     expect(classifyDailyOvertime(637, 516)).toEqual({ regular: 516, ot125: 120, ot150: 1 });
     expect(classifyDailyOvertime(0, 516)).toEqual({ regular: 0, ot125: 0, ot150: 0 });
   });
-  it('engine at exactly the threshold and one minute over', () => {
-    const r = run({ breakMethod: 'none' }, [sh(MON, '08:00', '16:36'), sh(TUE, '08:00', '16:37')], SUN, SAT);
+  it('five-day office threshold: exactly 8:24 → no overtime, 8:25 → 1 minute', () => {
+    const r = run({ breakMethod: 'none' }, [sh(MON, '08:00', '16:24'), sh(TUE, '08:00', '16:25')], SUN, SAT);
     expect(day(r, MON).dailyOvertimeMinutes).toBe(0);
+    expect(day(r, MON).buckets.regular).toBe(H(8, 24));
     expect(day(r, TUE).buckets.ot125).toBe(1);
   });
-  it('weekly 42:00 exactly → no weekly overtime; 42:01 → 1 minute', () => {
-    const base = [SUN, MON, TUE, WED].map((d) => sh(d, '08:00', '16:36'));
-    const exact = run({ breakMethod: 'none' }, [...base, sh(THU, '08:00', '15:36')], SUN, SAT);
+  it('shortened day: exactly 7:36 → no overtime, 7:37 → 1 minute', () => {
+    const r = run({ breakMethod: 'none', shortDay: 4 }, [sh(THU, '08:00', '15:36')], SUN, SAT);
+    expect(day(r, THU).dailyOvertimeMinutes).toBe(0);
+    const r2 = run({ breakMethod: 'none', shortDay: 4 }, [sh(THU, '08:00', '15:37')], SUN, SAT);
+    expect(day(r2, THU).buckets.ot125).toBe(1);
+  });
+  it('six-day threshold unchanged: exactly 8:00 → no overtime, 8:01 → 1 minute; Friday 7:00', () => {
+    const r = run({ breakMethod: 'none', workweek: 'six' }, [sh(MON, '08:00', '16:00'), sh(TUE, '08:00', '16:01'), sh(FRI, '08:00', '15:01')], SUN, SAT);
+    expect(day(r, MON).dailyOvertimeMinutes).toBe(0);
+    expect(day(r, TUE).buckets.ot125).toBe(1);
+    expect(day(r, FRI).dailyThresholdMinutes).toBe(H(7));
+    expect(day(r, FRI).buckets.ot125).toBe(1);
+  });
+  it('weekly 42:00 exactly → no weekly overtime; 42:01 → 1 minute (five-day, 8:24 policy)', () => {
+    // 4 × 8:24 + 7:36 (short day) = 41:12; Friday 0:48 → 42:00
+    const base = [SUN, MON, TUE, WED].map((d) => sh(d, '08:00', '16:24'));
+    base.push(sh(THU, '08:00', '15:36'));
+    const exact = run({ breakMethod: 'none' }, [...base, sh(FRI, '08:00', '08:48')], SUN, SAT);
     expect(exact.totals.netMinutes).toBe(H(42));
-    expect(exact.totals.weeklyOvertimeMinutes).toBe(0);
-    const over = run({ breakMethod: 'none' }, [...base, sh(THU, '08:00', '15:36'), sh(FRI, '08:00', '08:01')], SUN, SAT);
+    expect(exact.totals.weeklyOvertimeMinutes + exact.totals.dailyOvertimeMinutes).toBe(0);
+    const over = run({ breakMethod: 'none' }, [...base, sh(FRI, '08:00', '08:49')], SUN, SAT);
     expect(over.totals.weeklyOvertimeMinutes).toBe(1);
+    expect(over.totals.dailyOvertimeMinutes).toBe(0);
+  });
+  it('daily and weekly overtime together without double counting (five-day, 8:24 policy)', () => {
+    // Sun–Wed 9:00 net (36 min daily OT each), Thu short day 9:00 (1:24 daily OT), Friday 2:00.
+    const shifts = [SUN, MON, TUE, WED, THU].map((d) => sh(d, '08:00', '17:00'));
+    shifts.push(sh(FRI, '08:00', '10:00'));
+    const r = run({ breakMethod: 'none', shortDay: 4 }, shifts, SUN, SAT);
+    expect(r.totals.netMinutes).toBe(H(47));
+    expect(r.totals.dailyOvertimeMinutes).toBe(4 * 36 + 84);
+    // regular so far: 4 × 8:24 + 7:36 = 41:12 → Friday: 0:48 regular, 1:12 weekly OT
+    expect(day(r, FRI).buckets.regular).toBe(48);
+    expect(day(r, FRI).weeklyOvertimeMinutes).toBe(72);
+    expect(r.totals.buckets.regular).toBe(H(42));
+    expect(r.totals.buckets.ot125).toBe(4 * 36 + 84 + 72);
+    expect(r.totals.buckets.ot150).toBe(0);
+    expect(r.totals.buckets.regular + r.totals.buckets.ot125 + r.totals.buckets.ot150).toBe(r.totals.netMinutes);
+  });
+  it('a long five-day day reaches the 150% tier after two overtime hours', () => {
+    const r = run({ breakMethod: 'none' }, [sh(MON, '07:00', '18:00')], SUN, SAT); // 11:00 net
+    expect(day(r, MON).buckets.regular).toBe(H(8, 24));
+    expect(day(r, MON).buckets.ot125).toBe(H(2));
+    expect(day(r, MON).buckets.ot150).toBe(H(0, 36));
+  });
+  it('an office threshold above the statute would never be applied (statute is the ceiling)', async () => {
+    const { OFFICE_POLICY, LAW } = await import('../index');
+    expect(OFFICE_POLICY.FIVE_DAY_DAILY_MINUTES).toBe(504);
+    expect(OFFICE_POLICY.FIVE_DAY_DAILY_MINUTES).toBeLessThanOrEqual(LAW.FIVE_DAY_NORMAL_MINUTES);
   });
 });
 
@@ -183,7 +226,7 @@ describe('duplicates and overlaps', () => {
     const r = run({ breakMethod: 'none' }, [sh(MON, '07:00', '12:00'), sh(MON, '15:00', '20:00')], SUN, SAT);
     const d = day(r, MON);
     expect(d.netMinutes).toBe(H(10));
-    expect(d.buckets.ot125).toBe(H(10) - H(8, 36));
+    expect(d.buckets.ot125).toBe(H(10) - H(8, 24));
   });
 });
 
@@ -197,7 +240,7 @@ describe('night work', () => {
   it('1:59 in the night window does not qualify', () => {
     const r = run({ breakMethod: 'none' }, [sh(MON, '16:01', '23:59')], SUN, SAT);
     expect(day(r, MON).isNight).toBe(false);
-    expect(day(r, MON).dailyThresholdMinutes).toBe(H(8, 36));
+    expect(day(r, MON).dailyThresholdMinutes).toBe(H(8, 24));
   });
   it('early-morning shift qualifies (04:00–12:00)', () => {
     const r = run({ breakMethod: 'none' }, [sh(MON, '04:00', '12:00')], SUN, SAT);
@@ -211,7 +254,7 @@ describe('night work', () => {
   });
   it('night rules can be disabled per employee', () => {
     const r = run({ breakMethod: 'none', nightRulesEnabled: false }, [sh(MON, '22:00', '06:00')], SUN, SAT);
-    expect(day(r, MON).dailyThresholdMinutes).toBe(H(8, 36));
+    expect(day(r, MON).dailyThresholdMinutes).toBe(H(8, 24));
   });
   it('flags night classification that depends on an unpositioned break', () => {
     const r = run({ breakMethod: 'manual' }, [sh(MON, '15:00', '00:10', { breakMinutes: 30 })], SUN, SAT);
@@ -465,8 +508,8 @@ describe('weekly tiering modes', () => {
 describe('indicative pay', () => {
   it('exact integer arithmetic, rounded once', () => {
     const r = run({ hourlyRateAgorot: 5000 }, [sh(SUN, '08:00', '18:00', { breakMinutes: 30 })], SUN, SAT);
-    // 8.6h × 50 = 430 + 0.9h × 62.5 = 56.25 → 486.25 ₪
-    expect(r.totals.payAgorot).toBe(48625);
+    // 8.4h × 50 = 420 + 1.1h × 62.5 = 68.75 → 488.75 ₪
+    expect(r.totals.payAgorot).toBe(48875);
   });
   it('rounding half up', () => {
     expect(roundPayUnits(2999)).toBe(0);

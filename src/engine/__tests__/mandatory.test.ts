@@ -22,28 +22,29 @@ const THU = '2026-10-15';
 const FRI = '2026-10-16';
 const SAT = '2026-10-17';
 
-describe('Test 1 — five-day ordinary day', () => {
+describe('Test 1 — five-day ordinary day (office policy 8:24)', () => {
   const r = run({ workweek: 'five' }, [sh(SUN, '08:00', '18:00', { breakMinutes: 30 })], SUN, SAT);
   const d = day(r, SUN);
   it('net, threshold, regular and overtime', () => {
     expect(d.grossMinutes).toBe(H(10));
     expect(d.breakMinutes).toBe(30);
     expect(d.netMinutes).toBe(H(9, 30));
-    expect(d.dailyThresholdMinutes).toBe(H(8, 36));
-    expect(d.buckets.regular).toBe(H(8, 36));
-    expect(d.buckets.ot125).toBe(54);
+    expect(d.dailyThresholdMinutes).toBe(H(8, 24));
+    expect(d.buckets.regular).toBe(H(8, 24));
+    expect(d.buckets.ot125).toBe(H(1, 6));
     expect(d.buckets.ot150).toBe(0);
   });
   it('produces the Hebrew audit explanation', () => {
     expect(d.explanation.join(' ')).toContain(
-      'לאחר ניכוי הפסקה של 30 דקות, העובד עבד 9 שעות ו-30 דקות נטו. תקן היום הוא 8 שעות ו-36 דקות, ולכן חושבו 54 דקות נוספות בתעריף 125%.',
+      'לאחר ניכוי הפסקה של 30 דקות, העובד עבד 9 שעות ו-30 דקות נטו. תקן היום הוא 8 שעות ו-24 דקות, ולכן חושבו שעה ו-6 דקות נוספות בתעריף 125%.',
     );
-    expect(d.explanation).toContain('תקן היום הוא 8 שעות ו-36 דקות, ולכן חושבו 54 דקות נוספות בתעריף 125%.');
+    expect(d.explanation).toContain('תקן היום הוא 8 שעות ו-24 דקות, ולכן חושבו שעה ו-6 דקות נוספות בתעריף 125%.');
+    expect(d.thresholdReasons.join(' ')).toContain('מדיניות המשרד');
   });
 });
 
-describe('Test 2 — five-day shortened day', () => {
-  it('uses 7:36 on the configured short day', () => {
+describe('Test 2 — five-day shortened day (statutory 7:36 preserved)', () => {
+  it('uses 7:36 on the configured short day, more favourable than the 8:24 office policy', () => {
     const r = run({ workweek: 'five', shortDay: 4 }, [sh(THU, '08:00', '17:00', { breakMinutes: 30 })], SUN, SAT);
     const d = day(r, THU);
     expect(d.netMinutes).toBe(H(8, 30));
@@ -55,11 +56,17 @@ describe('Test 2 — five-day shortened day', () => {
   it('the short day is configurable (Sunday)', () => {
     const r = run({ workweek: 'five', shortDay: 0 }, [sh(SUN, '08:00', '17:00', { breakMinutes: 30 }), sh(THU, '08:00', '17:00', { breakMinutes: 30 })], SUN, SAT);
     expect(day(r, SUN).dailyThresholdMinutes).toBe(H(7, 36));
-    expect(day(r, THU).dailyThresholdMinutes).toBe(H(8, 36));
+    expect(day(r, THU).dailyThresholdMinutes).toBe(H(8, 24));
   });
-  it('never uses 8:24 (8.4 decimal) as a daily threshold', () => {
-    const r = run({ workweek: 'five' }, [MON, TUE, WED, THU].map((d) => sh(d, '08:00', '17:00', { breakMinutes: 30 })), SUN, SAT);
-    for (const d of r.days) expect(d.dailyThresholdMinutes).not.toBe(H(8, 24));
+  it('ordinary days use 8:24 (8.4 decimal), the short day 7:36; 8:36 is never used', () => {
+    const r = run({ workweek: 'five', shortDay: 4 }, [SUN, MON, TUE, WED, THU].map((d) => sh(d, '08:00', '17:00', { breakMinutes: 30 })), SUN, SAT);
+    for (const d of [SUN, MON, TUE, WED]) {
+      expect(day(r, d).dailyThresholdMinutes).toBe(H(8, 24));
+      expect(day(r, d).buckets.ot125).toBe(6); // 8:30 net − 8:24
+    }
+    expect(day(r, THU).dailyThresholdMinutes).toBe(H(7, 36));
+    expect(day(r, THU).buckets.ot125).toBe(54);
+    for (const d of r.days) expect(d.dailyThresholdMinutes).not.toBe(H(8, 36));
   });
 });
 
@@ -68,9 +75,9 @@ describe('Test 3 — more than two overtime hours', () => {
     const r = run({ workweek: 'five' }, [sh(MON, '07:00', '19:30', { breakMinutes: 30 })], SUN, SAT);
     const d = day(r, MON);
     expect(d.netMinutes).toBe(H(12));
-    expect(d.buckets.regular).toBe(H(8, 36));
+    expect(d.buckets.regular).toBe(H(8, 24));
     expect(d.buckets.ot125).toBe(H(2));
-    expect(d.buckets.ot150).toBe(H(1, 24));
+    expect(d.buckets.ot150).toBe(H(1, 36));
   });
 });
 
@@ -96,10 +103,10 @@ describe('Test 4 — six-day weekly overtime', () => {
 describe('Test 5 — a short day does not cancel overtime', () => {
   it('keeps the overtime earned on the long day', () => {
     const r = run({ workweek: 'five', breakMethod: 'manual' }, [sh(MON, '08:00', '18:00'), sh(TUE, '08:00', '14:00')], SUN, SAT);
-    expect(day(r, MON).buckets.ot125).toBe(H(10) - H(8, 36));
-    expect(r.totals.buckets.ot125).toBe(84);
+    expect(day(r, MON).buckets.ot125).toBe(H(10) - H(8, 24));
+    expect(r.totals.buckets.ot125).toBe(96);
     expect(r.totals.netMinutes).toBe(H(16));
-    expect(r.totals.buckets.regular).toBe(H(16) - 84);
+    expect(r.totals.buckets.regular).toBe(H(16) - 96);
   });
 });
 
@@ -223,8 +230,8 @@ describe('Test 12 — paid versus unpaid break', () => {
     expect(day(unpaid, MON).netMinutes).toBe(H(8, 30));
     expect(day(paid, MON).netMinutes).toBe(H(9));
     expect(day(paid, MON).paidBreakMinutes).toBe(30);
-    expect(day(paid, MON).buckets.ot125).toBe(24);
-    expect(day(unpaid, MON).buckets.ot125).toBe(0);
+    expect(day(paid, MON).buckets.ot125).toBe(36); // 9:00 − 8:24
+    expect(day(unpaid, MON).buckets.ot125).toBe(6); // 8:30 − 8:24
   });
   it("employee method 'paid' never deducts", () => {
     const r = run({ breakMethod: 'paid' }, [sh(MON, '08:00', '17:00')], SUN, SAT);
