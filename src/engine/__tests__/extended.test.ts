@@ -431,6 +431,18 @@ describe('profiles', () => {
   });
 });
 
+describe('review acknowledgement', () => {
+  it('marking a shift as reviewed acknowledges its review flags but not unconfirmed breaks', () => {
+    const open = run({ workweek: 'five', breakMethod: 'company_auto' }, [sh(FRI, '08:00', '15:00')], SUN, SAT);
+    expect(open.totals.reviewCount).toBe(2); // unscheduled day + unconfirmed break
+    const s = { ...sh(FRI, '08:00', '15:00'), reviewed: true };
+    const rev = run({ workweek: 'five', breakMethod: 'company_auto' }, [s], SUN, SAT);
+    expect(rev.totals.reviewCount).toBe(1);
+    expect(day(rev, FRI).warnings.find((w) => w.code === 'UNSCHEDULED_DAY_WORK')!.acknowledged).toBe(true);
+    expect(day(rev, FRI).warnings.find((w) => w.code === 'BREAK_UNCONFIRMED')!.acknowledged).toBeUndefined();
+  });
+});
+
 describe('weekly tiering modes', () => {
   // Six-day: Sun–Wed 8h, Thu 10h net (2h daily OT), Fri 5h → weekly OT on Friday.
   const shifts = [SUN, MON, TUE, WED].map((d) => sh(d, '08:00', '16:00'));

@@ -127,7 +127,7 @@ export class CalendarContext {
   constructor(
     from: LocalDate,
     to: LocalDate,
-    private readonly customHolidays: CustomHoliday[],
+    customHolidays: CustomHoliday[],
   ) {
     const y0 = parseDate(addDays(from, -2)).y;
     const y1 = parseDate(addDays(to, 2)).y;

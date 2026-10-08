@@ -11,7 +11,9 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc -b --noEmit",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "test:e2e": "vite build && playwright test",
+    "test:rust": "cargo test --manifest-path src-tauri/Cargo.toml --lib"
   },
   "dependencies": {
     "@fontsource/heebo": "^5.3.0",
@@ -24,6 +26,7 @@
     "sql.js": "^1.14.2"
   },
   "devDependencies": {
+    "@playwright/test": "1.56",
     "@tailwindcss/vite": "^4.3.3",
     "@tauri-apps/cli": "^2.12.1",
     "@types/node": "^22.20.5",

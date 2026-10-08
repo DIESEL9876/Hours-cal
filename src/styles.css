@@ -1,0 +1,83 @@
+@import "tailwindcss";
+@import "@fontsource/heebo/300.css";
+@import "@fontsource/heebo/400.css";
+@import "@fontsource/heebo/500.css";
+@import "@fontsource/heebo/600.css";
+@import "@fontsource/heebo/700.css";
+
+@theme {
+  --font-sans: "Heebo", "Segoe UI", system-ui, sans-serif;
+  --color-ink: #0f1b2d;
+  --color-ink-soft: #475569;
+  --color-line: #e3e8ef;
+  --color-canvas: #f5f7fa;
+  --color-brand: #1d4ed8;
+  --color-brand-dark: #1e3a8a;
+  --color-brand-soft: #eef3ff;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  @apply bg-canvas text-ink antialiased;
+  font-feature-settings: "tnum" 1;
+}
+
+/* Numbers and times inside RTL tables keep left-to-right digit order. */
+.num {
+  direction: ltr;
+  unicode-bidi: isolate;
+  font-variant-numeric: tabular-nums;
+}
+
+@layer components {
+.cell-input {
+  @apply w-[4.6rem] rounded-md border border-transparent bg-transparent px-1.5 py-1 text-center text-[14px] outline-none transition;
+  direction: ltr;
+  font-variant-numeric: tabular-nums;
+}
+.cell-input:hover {
+  @apply border-line bg-white;
+}
+.cell-input:focus {
+  @apply border-brand bg-white ring-2 ring-brand/15;
+}
+.cell-input.invalid {
+  @apply border-red-400 bg-red-50;
+}
+
+.field-input {
+  @apply w-full rounded-lg border border-line bg-white px-3 py-2 text-[14px] outline-none transition placeholder:text-slate-400 focus:border-brand focus:ring-2 focus:ring-brand/15 disabled:bg-slate-50;
+}
+}
+
+@media print {
+  .no-print {
+    display: none !important;
+  }
+  body {
+    background: white;
+  }
+  .print-full {
+    overflow: visible !important;
+    height: auto !important;
+    max-height: none !important;
+  }
+  .print-only {
+    display: block !important;
+  }
+  table {
+    font-size: 10px;
+  }
+  @page {
+    size: A4 landscape;
+    margin: 10mm;
+  }
+}
+.print-only {
+  display: none;
+}

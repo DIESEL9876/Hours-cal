@@ -672,6 +672,17 @@ export function calculateEmployeePeriod(input: EmployeePeriodInput): EmployeePer
       lastDay.result.warnings.push(...week.warnings);
     }
   }
+  // Review flags acknowledged by marking shifts as reviewed (break confirmation is never implied).
+  const reviewedShift = new Map(input.shifts.map((s) => [s.id, s.reviewed]));
+  for (const dw of dayWork.values()) {
+    const dayShiftIds = dw.shifts.map((p) => p.result.shiftId);
+    const allReviewed = dayShiftIds.length > 0 && dayShiftIds.every((id) => reviewedShift.get(id));
+    dw.result.warnings = dw.result.warnings.map((w) =>
+      w.severity === 'review' && w.code !== 'BREAK_UNCONFIRMED' && (w.shiftId ? reviewedShift.get(w.shiftId) : allReviewed) ? { ...w, acknowledged: true } : w,
+    );
+    for (const sr of dw.result.shifts)
+      sr.warnings = sr.warnings.map((w) => (w.severity === 'review' && w.code !== 'BREAK_UNCONFIRMED' && reviewedShift.get(sr.shiftId) ? { ...w, acknowledged: true } : w));
+  }
   for (const dw of dayWork.values()) {
     buildExplanation(dw);
     dw.payUnits = payUnitsFor(dw);
@@ -838,7 +849,7 @@ function calculatePeriodTotals(days: DayWork[], periodWarnings: Warning[]): Peri
   }
   const unique = dedupeWarnings(all);
   t.errorCount = unique.filter((w) => w.severity === 'error').length;
-  t.reviewCount = unique.filter((w) => w.severity === 'review').length;
+  t.reviewCount = unique.filter((w) => w.severity === 'review' && !w.acknowledged).length;
   t.complianceCount = unique.filter((w) => w.severity === 'compliance').length;
   t.payAgorot = payUnits === null ? null : roundPayUnits(payUnits);
   return t;

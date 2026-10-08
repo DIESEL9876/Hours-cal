@@ -154,6 +154,8 @@ export interface Warning {
   message: string;
   date?: LocalDate;
   shiftId?: string;
+  /** Review flag acknowledged by a human (shift marked as reviewed). Not counted as open. */
+  acknowledged?: boolean;
 }
 
 export type Tier = 'regular' | 'ot125' | 'ot150';
