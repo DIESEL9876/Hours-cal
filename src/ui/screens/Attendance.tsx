@@ -21,7 +21,7 @@ import {
 } from '../../engine';
 import { toDayStatuses, type Business, type DayEntry, type Employee, type ShiftRecord } from '../../data/repo';
 import { Crumbs, useApp } from '../App';
-import { Badge, Button, Checkbox, Drawer, Field, IconButton, PageHeader, Select, severityLabel, severityTone, useUi } from '../components';
+import { Badge, Button, Checkbox, DECIMAL_HOURS_LABEL, DECIMAL_HOURS_TITLE, DecimalHours, Drawer, Field, IconButton, PageHeader, Select, severityLabel, severityTone, useUi } from '../components';
 import { IconAlert, IconCheck, IconDownload, IconInfo, IconPlus, IconPrinter, IconRedo, IconTrash, IconUndo } from '../icons';
 import { MonthPicker } from '../MonthPicker';
 import { formatDateHe, hm, monthTitle, shekels, STATUS_LABELS, STATUS_OPTIONS } from '../format';
@@ -337,16 +337,17 @@ export function AttendanceScreen({ businessId, employeeId }: { businessId: strin
       <TotalsBar
         items={[
           { label: 'ימי עבודה בפועל', value: String(t.daysWorked), testid: 'total-days' },
-          { label: 'שעות ברוטו', value: hm(t.grossMinutes, '0:00') },
-          { label: 'סך הפסקות', value: hm(t.breakMinutes, '0:00') },
-          { label: 'שעות רגילות', value: hm(t.buckets.regular, '0:00'), testid: 'total-regular' },
-          { label: 'שעות נוספות 125%', value: hm(t.buckets.ot125, '0:00'), testid: 'total-125' },
-          { label: 'שעות נוספות 150%', value: hm(t.buckets.ot150, '0:00'), testid: 'total-150' },
+          { legend: true, label: '', value: '' },
+          { label: 'שעות ברוטו', value: hm(t.grossMinutes, '0:00'), decimalMinutes: t.grossMinutes, testid: 'total-gross' },
+          { label: 'סך הפסקות', value: hm(t.breakMinutes, '0:00'), decimalMinutes: t.breakMinutes, testid: 'total-breaks' },
+          { label: 'שעות רגילות', value: hm(t.buckets.regular, '0:00'), decimalMinutes: t.buckets.regular, testid: 'total-regular' },
+          { label: 'שעות נוספות 125%', value: hm(t.buckets.ot125, '0:00'), decimalMinutes: t.buckets.ot125, testid: 'total-125' },
+          { label: 'שעות נוספות 150%', value: hm(t.buckets.ot150, '0:00'), decimalMinutes: t.buckets.ot150, testid: 'total-150' },
           ...(prem.total > 0
             ? [{ label: 'מנוחה/חג 150·175·200', value: `${hm(prem.p150, '0')} · ${hm(prem.p175, '0')} · ${hm(prem.p200, '0')}` }]
             : []),
           ...(t.buckets.unclassified > 0 ? [{ label: 'לא מסווג', value: hm(t.buckets.unclassified) }] : []),
-          { label: 'שעות עבודה נטו בסה״כ', value: hm(t.netMinutes, '0:00'), strong: true, testid: 'total-net' },
+          { label: 'שעות עבודה נטו בסה״כ', value: hm(t.netMinutes, '0:00'), decimalMinutes: t.netMinutes, strong: true, testid: 'total-net' },
           ...(hasPay ? [{ label: 'הערכת עלות (לא תלוש)', value: shekels(t.payAgorot) }] : []),
         ]}
         flags={[
@@ -700,21 +701,35 @@ function TotalsBar({
   items,
   flags,
 }: {
-  items: { label: string; value: string; strong?: boolean; testid?: string }[];
+  items: { label: string; value: string; strong?: boolean; testid?: string; decimalMinutes?: number; legend?: boolean }[];
   flags: { label: string; count: number; tone: 'amber' | 'red' | 'violet'; onClick: () => void }[];
 }) {
   const visible = flags.filter((f) => f.count > 0);
   return (
     <div className="fixed inset-x-0 bottom-0 z-20 border-t border-line bg-white/95 shadow-[0_-4px_16px_rgba(15,27,45,0.06)] backdrop-blur print:static print:mt-4 print:shadow-none">
-      <div className="mx-auto flex max-w-[1600px] flex-wrap items-center gap-x-6 gap-y-2 px-6 py-3">
-        {items.map((it) => (
-          <div key={it.label} className="min-w-0">
-            <div className="text-[11px] text-ink-soft">{it.label}</div>
-            <div className={`num text-right ${it.strong ? 'text-[18px] font-bold text-brand' : 'text-[15px] font-semibold text-ink'}`} data-testid={it.testid}>
-              {it.value}
+      <div className="mx-auto flex max-w-[1600px] flex-wrap items-start gap-x-6 gap-y-2 px-6 py-3">
+        {items.map((it) =>
+          it.legend ? (
+            // Row header for the two value rows: primary HH:MM, secondary decimal hours.
+            <div key="legend" className="min-w-0 border-e border-line pe-4" data-testid="decimal-legend">
+              <div className="text-[11px] select-none" aria-hidden>{'\u00A0'}</div>
+              <div className="py-[3px] text-[11px] font-medium text-ink-soft">ש:דד</div>
+              <div className="mt-0.5 text-[11px] leading-tight text-slate-500" title={DECIMAL_HOURS_TITLE}>
+                {DECIMAL_HOURS_LABEL}
+              </div>
             </div>
-          </div>
-        ))}
+          ) : (
+            <div key={it.label} className="min-w-0">
+              <div className="text-[11px] text-ink-soft">{it.label}</div>
+              <div className={`num text-right ${it.strong ? 'text-[18px] font-bold text-brand' : 'text-[15px] font-semibold text-ink'}`} data-testid={it.testid}>
+                {it.value}
+              </div>
+              {it.decimalMinutes !== undefined && (
+                <DecimalHours minutes={it.decimalMinutes} testid={it.testid ? `${it.testid}-decimal` : undefined} className={it.strong ? 'text-[12px] font-medium text-brand/80' : ''} />
+              )}
+            </div>
+          ),
+        )}
         <div className="no-print ms-auto flex flex-wrap gap-1.5">
           {visible.length === 0 ? (
             <Badge tone="green">

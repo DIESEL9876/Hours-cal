@@ -98,6 +98,28 @@ test('full workflow: business → employee → attendance → summary → export
   const net = await page.getByTestId('total-net').innerText();
   expect(net).toBe('25:30'); // 9:30 + 7:30 + 8:30
 
+  // --- decimal hours under the monthly totals (secondary row), HH:MM unchanged ------------
+  await expect(page.getByTestId('decimal-legend')).toContainText('שעות עשרוניות');
+  const totals: [string, string, string][] = [
+    ['total-gross', '27:00', '27.00'],
+    ['total-breaks', '1:30', '1.50'],
+    ['total-regular', '23:00', '23.00'], // 8:24 + 7:00 + 7:36
+    ['total-125', '2:30', '2.50'], // 1:06 + 0:30 + 0:54
+    ['total-150', '0:00', '0.00'],
+    ['total-net', '25:30', '25.50'],
+  ];
+  for (const [id, hhmm, dec] of totals) {
+    await expect(page.getByTestId(id)).toHaveText(hhmm);
+    await expect(page.getByTestId(`${id}-decimal`)).toHaveText(dec);
+  }
+  await expect(page.getByTestId('total-days-decimal')).toHaveCount(0);
+  // daily rows and weekly subtotal rows have no decimal values
+  const table = page.getByTestId('attendance-table');
+  await expect(table.getByTitle(/שעות עשרוניות/)).toHaveCount(0);
+  await expect(table).not.toContainText('שעות עשרוניות');
+  for (const v of ['9.50', '7.50', '8.50', '25.50', '1.10', '8.40']) await expect(table).not.toContainText(v);
+  await expect(page.getByTestId('day-2026-10-11')).toContainText('9:30');
+
   // --- persistence across reload -----------------------------------------------
   await page.reload();
   await page.getByTestId('business-card').filter({ hasText: 'עסק בדיקה א' }).getByRole('button', { name: 'כניסה לעסק' }).click();
@@ -120,6 +142,15 @@ test('full workflow: business → employee → attendance → summary → export
   await page.getByRole('button', { name: 'סיכום חודשי' }).click();
   await expect(page.getByRole('heading', { name: 'סיכום שעות עובדים - אוקטובר 2026' })).toBeVisible();
   await expect(page.getByTestId('grand-total')).toContainText('25:30');
+  // decimal hours under HH:MM, for the employee row and the business total — no extra rows
+  await expect(page.getByTestId('summary-row')).toHaveCount(1);
+  await expect(page.getByTestId('decimal-legend')).toContainText('ערך תחתון: שעות עשרוניות');
+  for (const scope of [page.getByTestId('summary-row'), page.getByTestId('grand-total')]) {
+    await expect(scope.getByTestId('dec-regular')).toHaveText('23.00');
+    await expect(scope.getByTestId('dec-125')).toHaveText('2.50');
+    await expect(scope.getByTestId('dec-150')).toHaveText('0.00');
+    await expect(scope.getByTestId('dec-net')).toHaveText('25.50');
+  }
 
   // export XLSX and verify totals match the screen
   const xlsxDl = page.waitForEvent('download');

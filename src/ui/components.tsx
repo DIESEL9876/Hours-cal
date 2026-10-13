@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { IconAlert, IconCheck, IconInfo, IconX } from './icons';
-import type { Severity } from '../engine';
+import { formatDecimalHours, type Severity } from '../engine';
 
 // ---------------------------------------------------------------------------
 // Buttons
@@ -352,5 +352,21 @@ export function UiProvider({ children }: { children: ReactNode }) {
         )}
       </Modal>
     </UiContext.Provider>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Decimal hours (secondary display under HH:MM totals in the monthly summary areas only)
+// ---------------------------------------------------------------------------
+
+export const DECIMAL_HOURS_LABEL = 'שעות עשרוניות';
+export const DECIMAL_HOURS_TITLE = 'שעות עשרוניות = סך הדקות ÷ 60 (שתי ספרות אחרי הנקודה)';
+
+/** Small muted decimal-hours value, e.g. 1580 minutes → 26.33. Computed from the integer-minute total. */
+export function DecimalHours({ minutes, testid, className = '' }: { minutes: number; testid?: string; className?: string }) {
+  return (
+    <div className={`num mt-0.5 text-right text-[11px] font-normal leading-tight text-slate-500 ${className}`} title={DECIMAL_HOURS_TITLE} data-testid={testid}>
+      {formatDecimalHours(minutes)}
+    </div>
   );
 }

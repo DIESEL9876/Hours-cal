@@ -1,7 +1,7 @@
 /**
  * XLSX / CSV generation and saving. Exports are generated locally; nothing is sent anywhere.
  */
-import { formatDecimalHours, formatHM, LAW, OFFICE_POLICY, type BusinessSummary, type EmployeePeriodResult } from '../engine';
+import { decimalHundredths, formatDecimalHours, formatHM, LAW, OFFICE_POLICY, type BusinessSummary, type EmployeePeriodResult } from '../engine';
 import type { Business, Employee } from '../data/repo';
 import { isTauri } from '../data/tauriDriver';
 import { monthTitle } from '../ui/format';
@@ -78,7 +78,7 @@ async function tablesToXlsx(tables: Table[], meta: { title: string; subtitle: st
           c.numFmt = '[h]:mm';
           c.alignment = { horizontal: 'center' };
           const d = row.getCell(++extra);
-          d.value = Math.round((cell.v * 100) / 60) / 100;
+          d.value = decimalHundredths(cell.v) / 100; // same conversion as the screens
           d.numFmt = '0.00';
           d.alignment = { horizontal: 'center' };
         } else if (cell.kind === 'int') {

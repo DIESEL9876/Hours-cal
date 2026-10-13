@@ -223,10 +223,21 @@ export function formatHM(minutes: number): string {
   return `${sign}${Math.floor(abs / 60)}:${pad2(abs % 60)}`;
 }
 
-/** Decimal hours with 2 decimals for export only. Computed from integer minutes at the last step. */
+/**
+ * Decimal hours = total minutes / 60, as an integer number of HUNDREDTHS of an hour, rounded half away from zero.
+ * Pure integer arithmetic on the integer-minute total: round(m × 100 / 60) = floor((10m + 3) / 6) for m ≥ 0.
+ * (m × 5 / 3 can only have fractional part 0, ⅓ or ⅔, so there is never an exact tie.)
+ */
+export function decimalHundredths(minutes: number): number {
+  if (!Number.isSafeInteger(minutes)) throw new Error('minutes must be an integer');
+  const abs = Math.abs(minutes);
+  const h = Math.floor((abs * 10 + 3) / 6);
+  return minutes < 0 ? -h : h;
+}
+
+/** Decimal hours with exactly 2 decimals, e.g. 1580 min (26:20) → '26.33'. Presentation/export only. */
 export function formatDecimalHours(minutes: number): string {
-  // Round half away from zero to 2 decimals using integer arithmetic.
-  const hundredths = Math.round((minutes * 100) / 60);
+  const hundredths = decimalHundredths(minutes);
   const sign = hundredths < 0 ? '-' : '';
   const abs = Math.abs(hundredths);
   return `${sign}${Math.floor(abs / 100)}.${pad2(abs % 100)}`;

@@ -47,6 +47,9 @@ Daily overtime thresholds (net of confirmed unpaid breaks; weekly regular cap 42
 
 Overtime: first two hours of the day 125%, then 150%; weekly rest / holiday 150 / 175 / 200%.
 
+The monthly totals bar and the business monthly summary also show each HH:MM total in decimal hours
+(`formatDecimalHours`: total minutes ÷ 60, exactly 2 decimals, integer arithmetic). Exports use the same function.
+
 Calculation order per shift (never changed): validate → gross → break rule → deductible break → validate break →
 net → daily threshold → weekly classification (no double counting) → explanation. Every net minute lands in
 exactly one bucket and `sum(buckets) === net` is asserted at runtime.

@@ -1,9 +1,9 @@
 import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
-import { dedupeWarnings, premiumMinutes, type BusinessSummary, type BusinessSummaryRow, type PeriodTotals } from '../../engine';
+import { dedupeWarnings, formatDecimalHours, premiumMinutes, type BusinessSummary, type BusinessSummaryRow, type PeriodTotals } from '../../engine';
 import type { Business, MonthReview } from '../../data/repo';
 import { computeBusinessMonth, sha256Hex, snapshotOf, yearMonthKey } from '../../data/service';
 import { Crumbs, useApp } from '../App';
-import { Badge, Button, Card, Checkbox, PageHeader, severityLabel, severityTone, useUi } from '../components';
+import { Badge, Button, Card, Checkbox, DECIMAL_HOURS_LABEL, DECIMAL_HOURS_TITLE, DecimalHours, PageHeader, severityLabel, severityTone, useUi } from '../components';
 import { IconAlert, IconCheck, IconChevronLeft, IconDownload, IconLock, IconPrinter, IconSearch } from '../icons';
 import { MonthPicker } from '../MonthPicker';
 import { formatDateHe, formatTimestamp, hm, monthTitle, shekels } from '../format';
@@ -153,6 +153,7 @@ export function SummaryScreen({ businessId }: { businessId: string }) {
         <div className="text-[12px]">
           {business.name} · {statusLine}
         </div>
+        <div className="text-[11px]">ערך עליון בכל תא שעות: ש:דד · ערך תחתון: {DECIMAL_HOURS_LABEL}</div>
       </div>
 
       {(blocking > 0 || openReview > 0 || g.complianceCount > 0 || changedSinceFinal) && (
@@ -171,7 +172,12 @@ export function SummaryScreen({ businessId }: { businessId: string }) {
             <IconSearch size={17} className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-slate-400" />
             <input className="field-input pr-9" placeholder="חיפוש עובד" value={query} onChange={(e) => setQuery(e.target.value)} />
           </div>
-          <span className="text-[12px] text-ink-soft">לחיצה על שורה מציגה פירוט שבועי והתראות</span>
+          <div className="flex items-center gap-4 text-[12px] text-ink-soft">
+            <span data-testid="decimal-legend" title={DECIMAL_HOURS_TITLE}>
+              ערך עליון: ש:דד · <span className="text-slate-500">ערך תחתון: {DECIMAL_HOURS_LABEL}</span>
+            </span>
+            <span>לחיצה על שורה מציגה פירוט שבועי והתראות</span>
+          </div>
         </div>
         <div className="overflow-x-auto">
           <table className="w-full text-[14px]" data-testid="summary-table">
@@ -211,13 +217,26 @@ export function SummaryScreen({ businessId }: { businessId: string }) {
               <tr className="border-t-2 border-slate-300 bg-slate-50 font-semibold" data-testid="grand-total">
                 <td className="px-4 py-3">סה״כ לעסק ({summary.rows.length} עובדים)</td>
                 <td className="num px-3 py-3 text-right">{g.daysWorked}</td>
-                <td className="num px-3 py-3 text-right">{hm(g.buckets.regular, '0:00')}</td>
-                <td className="num px-3 py-3 text-right">{hm(g.buckets.ot125, '0:00')}</td>
-                <td className="num px-3 py-3 text-right">{hm(g.buckets.ot150, '0:00')}</td>
+                <td className="num px-3 py-3 text-right">
+                  {hm(g.buckets.regular, '0:00')}
+                  <DecimalHours minutes={g.buckets.regular} testid="dec-regular" />
+                </td>
+                <td className="num px-3 py-3 text-right">
+                  {hm(g.buckets.ot125, '0:00')}
+                  <DecimalHours minutes={g.buckets.ot125} testid="dec-125" />
+                </td>
+                <td className="num px-3 py-3 text-right">
+                  {hm(g.buckets.ot150, '0:00')}
+                  <DecimalHours minutes={g.buckets.ot150} testid="dec-150" />
+                </td>
                 <td className="num px-3 py-3 text-right">
                   {hm(gp.p150, '0')} · {hm(gp.p175, '0')} · {hm(gp.p200, '0')}
+                  <DecimalTriple a={gp.p150} b={gp.p175} c={gp.p200} />
                 </td>
-                <td className="num px-3 py-3 text-right text-brand">{hm(g.netMinutes, '0:00')}</td>
+                <td className="num px-3 py-3 text-right text-brand">
+                  {hm(g.netMinutes, '0:00')}
+                  <DecimalHours minutes={g.netMinutes} testid="dec-net" />
+                </td>
                 {includePay && <td className="num px-3 py-3 text-right">{shekels(g.payAgorot)}</td>}
                 <td className="px-3 py-3 text-[12px] font-normal">{issuesText(g) || '—'}</td>
               </tr>
@@ -302,11 +321,32 @@ function SummaryRow({ name, number, t, includePay, expanded, onToggle }: { name:
         </div>
       </td>
       <td className="num px-3 py-3 text-right">{t.daysWorked}</td>
-      <td className="num px-3 py-3 text-right">{hm(t.buckets.regular, '0:00')}</td>
-      <td className="num px-3 py-3 text-right">{hm(t.buckets.ot125, '0:00')}</td>
-      <td className="num px-3 py-3 text-right">{hm(t.buckets.ot150, '0:00')}</td>
-      <td className="num px-3 py-3 text-right text-[13px]">{p.total ? `${hm(p.p150, '0')} · ${hm(p.p175, '0')} · ${hm(p.p200, '0')}` : '–'}</td>
-      <td className="num px-3 py-3 text-right font-semibold">{hm(t.netMinutes, '0:00')}</td>
+      <td className="num px-3 py-3 text-right">
+        {hm(t.buckets.regular, '0:00')}
+        <DecimalHours minutes={t.buckets.regular} testid="dec-regular" />
+      </td>
+      <td className="num px-3 py-3 text-right">
+        {hm(t.buckets.ot125, '0:00')}
+        <DecimalHours minutes={t.buckets.ot125} testid="dec-125" />
+      </td>
+      <td className="num px-3 py-3 text-right">
+        {hm(t.buckets.ot150, '0:00')}
+        <DecimalHours minutes={t.buckets.ot150} testid="dec-150" />
+      </td>
+      <td className="num px-3 py-3 text-right text-[13px]">
+        {p.total ? (
+          <>
+            {`${hm(p.p150, '0')} · ${hm(p.p175, '0')} · ${hm(p.p200, '0')}`}
+            <DecimalTriple a={p.p150} b={p.p175} c={p.p200} />
+          </>
+        ) : (
+          '–'
+        )}
+      </td>
+      <td className="num px-3 py-3 text-right font-semibold">
+        {hm(t.netMinutes, '0:00')}
+        <DecimalHours minutes={t.netMinutes} testid="dec-net" />
+      </td>
       {includePay && <td className="num px-3 py-3 text-right">{shekels(t.payAgorot)}</td>}
       <td className="px-3 py-3">{issues ? <Badge tone={t.errorCount || t.unconfirmedBreaks ? 'red' : 'amber'}>{issues}</Badge> : <Badge tone="green">תקין לבדיקה</Badge>}</td>
     </tr>
@@ -369,6 +409,15 @@ function EmployeeDetail({ row, onOpen }: { row: BusinessSummaryRow; onOpen: () =
           ))}
         </ul>
       </div>
+    </div>
+  );
+}
+
+/** Decimal-hours line for the weekly-rest / holiday 150·175·200 triple. */
+function DecimalTriple({ a, b, c }: { a: number; b: number; c: number }) {
+  return (
+    <div className="num mt-0.5 text-right text-[11px] font-normal leading-tight text-slate-500" title={DECIMAL_HOURS_TITLE} data-testid="dec-premium">
+      {formatDecimalHours(a)} · {formatDecimalHours(b)} · {formatDecimalHours(c)}
     </div>
   );
 }
