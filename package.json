@@ -13,7 +13,9 @@
     "typecheck": "tsc -b --noEmit",
     "tauri": "tauri",
     "test:e2e": "vite build && playwright test",
-    "test:rust": "cargo test --workspace && cargo test --manifest-path src-tauri/Cargo.toml --lib",
+    "test:rust": "cargo test --workspace && cargo test --manifest-path src-tauri/Cargo.toml --lib && cargo test --manifest-path license-manager/src-tauri/Cargo.toml --lib",
+    "build:license-manager": "vite build --config license-manager/vite.config.ts",
+    "audit:installers": "node scripts/audit-installers.mjs",
     "check:release": "node scripts/check-release.mjs"
   },
   "dependencies": {

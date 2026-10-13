@@ -15,6 +15,7 @@ under the Israeli Hours of Work and Rest framework. Full Hebrew RTL interface.
 | [`docs/LEGAL_RULES.md`](docs/LEGAL_RULES.md) | Every rule applied, its source, verification status/date, and the exact algorithm |
 | [`docs/REVIEW_CASES.md`](docs/REVIEW_CASES.md) | Exceptional cases that require human payroll review (with flag codes) |
 | [`docs/USER_GUIDE_HE.md`](docs/USER_GUIDE_HE.md) | Short Hebrew user guide |
+| [`docs/LICENSE_MANAGER_GUIDE_HE.md`](docs/LICENSE_MANAGER_GUIDE_HE.md) | Hebrew guide for the owner-only License Manager (key setup, issuing, registry, backups, go-live) |
 
 ## Architecture
 
@@ -116,6 +117,13 @@ npm run test:rust          # licensing crates + Rust storage layer (needs webkit
 - **Staged enforcement:** the licence requirement is enabled only when the owner's PUBLIC key is placed in `src-tauri/keys/license_public_key.txt`.
 - **Secrets:** private keys, issued licences and the issuance log are git-ignored and never bundled.
 - **Owner guide (Hebrew):** [`docs/LICENSING_OWNER_GUIDE_HE.md`](docs/LICENSING_OWNER_GUIDE_HE.md). Integration notes: [`docs/LICENSING_INTEGRATION.md`](docs/LICENSING_INTEGRATION.md).
+- **License Manager (OWNER-ONLY GUI):** `license-manager/` is a separate Tauri app (Hebrew RTL) built on
+  `crates/hourscal-license-manager`. It generates the signing key on the owner's PC and stores it with Windows DPAPI. It
+  issues and self-verifies licences, keeps a local SQLite registry, and writes passphrase-encrypted key backups
+  (Argon2id + XChaCha20-Poly1305). All private-key work happens in Rust, and no command returns the key. Build it with
+  `cd license-manager && npx tauri build` (Windows), or cross-build with
+  `CARGO_TARGET_DIR=../src-tauri/target npx tauri build --target x86_64-pc-windows-gnu --bundles nsis`.
+  It is never part of the Hours-Cal installer.
 - **Release gate:** `npm run check:release` must pass before public distribution. It requires the contact email and the public key.
 
 © 2026 עילי נגר | כל הזכויות שמורות

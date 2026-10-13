@@ -16,7 +16,7 @@ export default defineConfig({
   build: { target: 'es2022', outDir: 'dist', chunkSizeWarningLimit: 2000 },
   test: {
     environment: 'node',
-    include: ['src/**/*.test.ts', 'src/**/*.test.tsx'],
+    include: ['src/**/*.test.ts', 'src/**/*.test.tsx', 'license-manager/src/**/*.test.tsx'],
     setupFiles: ['./vitest.setup.ts'],
   },
 });

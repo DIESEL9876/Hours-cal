@@ -430,3 +430,49 @@ fn foreign_key_records_are_reported_as_unverifiable() {
     assert_eq!(v[0].status, LicenseStatus::Unverifiable);
     assert!(reexport(&m.vault, &m.registry, &x.license.record.license_id, &_t.0.join("o")).is_err(), "never re-export what does not verify");
 }
+
+/// The owner's documented go-live workflow, end to end:
+/// 1) create the key in the License Manager, 2) issue a licence for the owner's own computer,
+/// 3) import it into the CURRENT Hours-Cal build (no public key embedded → licence not yet required;
+///    `preinstall` stores it), 4) build Hours-Cal with the exported license_public_key.txt →
+///    the enforced build opens straight to Ready on that computer, while another computer must activate.
+#[test]
+fn own_computer_activation_workflow_before_enforcement() {
+    use hourscal_license::enforcement::preinstall;
+    let (t, m) = ready_manager("golive");
+    let my_device = from_machine_guid(GUID_A);
+    let issued = issue(&m.vault, &m.registry, &req(&my_device, "perpetual", None), &t.0.join("out"), today()).unwrap();
+    let hclic = std::fs::read_to_string(&issued.file_path).unwrap();
+    let exported = std::fs::read_to_string(m.vault.public_key_path()).unwrap();
+
+    // Hours-Cal as shipped today: the repository key file has no key line → not enforced.
+    let repo_key_file = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../src-tauri/keys/license_public_key.txt")).unwrap();
+    let current = parse_key_file(&repo_key_file);
+    assert!(matches!(current, KeyConfig::NotConfigured), "the shipped Hours-Cal must not enforce yet");
+
+    let app = Tmp::new("hourscal-config");
+    let doc = LegalDocument::render(AGREEMENT_TEMPLATE, "1.0", "");
+    let db = app.0.join("hours-cal.sqlite3");
+    let cfg = |version: &'static str, trusted: &[ed25519_dalek::VerifyingKey], keys: &KeyConfig| {
+        decide_staged(
+            &StartupConfig { config_dir: &app.0, app_version: version, doc: &doc, trusted_keys: trusted, revoked_ids: &[], machine_guid: Some(GUID_A), today: today(), db_path: &db },
+            keys,
+        )
+        .unwrap()
+    };
+    LegalStore::new(&app.0).accept("1.1.3", &doc, None, Some(&my_device)).unwrap();
+    assert!(matches!(cfg("1.1.3", &[], &current), Route::Ready { .. }));
+    // Owner imports the licence file in the current version ("ייבוא קובץ רישיון").
+    let p = preinstall(&LicenseStore::new(&app.0), &hclic, &my_device, today()).unwrap();
+    assert_eq!(p.license_id, issued.license.record.license_id);
+
+    // Enforced build (e.g. 1.1.4) with the exported public key: opens without asking for activation.
+    let enforced = parse_key_file(&exported);
+    LegalStore::new(&app.0).accept("1.1.4", &doc, None, Some(&my_device)).unwrap();
+    match cfg("1.1.4", &enforced.trusted(), &enforced) {
+        Route::Ready { license_id, .. } => assert_eq!(license_id, issued.license.record.license_id),
+        other => panic!("owner's computer must open directly, got {other:?}"),
+    }
+    // A customer computer without a licence is asked to activate.
+    assert!(matches!(hours_cal_accepts(&exported, "", GUID_B), Route::Activation { .. }));
+}

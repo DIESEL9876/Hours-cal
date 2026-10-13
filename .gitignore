@@ -14,3 +14,9 @@ release/
 issued-licenses.csv
 *.hclic
 /target
+license-manager/src-tauri/target
+license-manager/src-tauri/gen
+license-manager/dist
+# License Manager owner data (key vault, encrypted key backups) must never be committed
+*.hckeybak
+owner-signing-key.json

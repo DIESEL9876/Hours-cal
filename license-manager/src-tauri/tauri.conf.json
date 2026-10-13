@@ -1,0 +1,40 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Hours-Cal License Manager",
+  "mainBinaryName": "hourscal-license-manager",
+  "version": "1.0.0",
+  "identifier": "il.owner.hourscal.licensemanager",
+  "build": {
+    "beforeDevCommand": "npx vite --config vite.config.ts",
+    "devUrl": "http://localhost:1430",
+    "beforeBuildCommand": "npx vite build --config vite.config.ts",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "Hours-Cal License Manager – ניהול רישיונות",
+        "width": 1320,
+        "height": 860,
+        "minWidth": 1050,
+        "minHeight": 680,
+        "center": true
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; script-src 'self'; connect-src ipc: http://ipc.localhost"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis"],
+    "publisher": "Ilay Nagar",
+    "shortDescription": "Hours-Cal License Manager – לשימוש בעל התוכנה בלבד",
+    "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.ico"],
+    "windows": {
+      "webviewInstallMode": { "type": "downloadBootstrapper", "silent": true },
+      "nsis": { "languages": ["Hebrew", "English"], "displayLanguageSelector": false, "installMode": "currentUser" }
+    }
+  }
+}
