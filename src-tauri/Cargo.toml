@@ -1,6 +1,6 @@
 [package]
 name = "hours-cal"
-version = "1.1.1"
+version = "1.1.3"
 description = "מערכת לניהול נוכחות וחישוב שעות עבודה ושעות נוספות"
 edition = "2021"
 
@@ -17,6 +17,7 @@ tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 rusqlite = { version = "0.32", features = ["bundled", "backup"] }
+hourscal-license = { path = "../crates/hourscal-license" }
 
 [profile.release]
 codegen-units = 1

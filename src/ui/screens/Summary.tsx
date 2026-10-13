@@ -8,6 +8,7 @@ import { IconAlert, IconCheck, IconChevronLeft, IconDownload, IconLock, IconPrin
 import { MonthPicker } from '../MonthPicker';
 import { formatDateHe, formatTimestamp, hm, monthTitle, shekels } from '../format';
 import { exportBusinessMonth } from '../../export/exporters';
+import { COPYRIGHT } from '../../licensing/CopyrightFooter';
 import { issuesText } from '../../export/tables';
 
 type SortKey = 'name' | 'days' | 'regular' | 'ot125' | 'ot150' | 'premium' | 'net';
@@ -154,6 +155,7 @@ export function SummaryScreen({ businessId }: { businessId: string }) {
           {business.name} · {statusLine}
         </div>
         <div className="text-[11px]">ערך עליון בכל תא שעות: ש:דד · ערך תחתון: {DECIMAL_HOURS_LABEL}</div>
+        <div className="text-[10px]">{COPYRIGHT}</div>
       </div>
 
       {(blocking > 0 || openReview > 0 || g.complianceCount > 0 || changedSinceFinal) && (

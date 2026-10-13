@@ -81,3 +81,17 @@ body {
 .print-only {
   display: none;
 }
+
+/* Licensing / legal screens (src/licensing/licensing.css) use the Hours-Cal design tokens. */
+:root {
+  --hc-accent: var(--color-brand);
+  --hc-bg: var(--color-canvas);
+  --hc-surface: #ffffff;
+  --hc-text: var(--color-ink);
+  --hc-muted: var(--color-ink-soft);
+  --hc-border: var(--color-line);
+  --hc-radius: 10px;
+  --hc-font: var(--font-sans);
+}
+/* Licensing panels embedded in app cards: no second background layer. */
+.hc-settings-legal { background: transparent; }

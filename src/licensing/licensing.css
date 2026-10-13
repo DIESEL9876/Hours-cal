@@ -59,3 +59,12 @@
 .hc-recovery__tables th, .hc-recovery__tables td { border-bottom: 1px solid var(--_border); padding: 4px 12px; text-align: right; }
 .hc-copyright { text-align: center; color: var(--_muted); font-size: .85rem; padding: 12px 0; }
 @media (prefers-reduced-motion: reduce) { .hc-legal__scroll { scroll-behavior: auto; } }
+/* Hours-Cal integration: licence status panel */
+.hc-license-status__mode { padding: 10px 14px; border-radius: var(--_radius); border: 1px solid var(--_border); background: var(--_surface); }
+.hc-license-status__mode--off { border-color: #f5d48a; background: #fffbeb; }
+.hc-license-status .hc-activate__facts { margin: 14px 0; }
+.hc-license-status .hc-activate__input { margin-top: 14px; }
+.hc-settings-legal h2 { font-size: 1.1rem; font-weight: 650; margin: 0 0 10px; }
+.hc-settings-legal h3 { font-size: 1rem; font-weight: 600; margin: 18px 0 6px; }
+.hc-settings-legal ul { list-style: disc; padding-inline-start: 1.4em; }
+.hc-activate__facts dd[dir="ltr"] { text-align: right; }

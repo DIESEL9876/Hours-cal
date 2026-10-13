@@ -5,6 +5,7 @@ import { decimalHundredths, formatDecimalHours, formatHM, LAW, OFFICE_POLICY, ty
 import type { Business, Employee } from '../data/repo';
 import { isTauri } from '../data/tauriDriver';
 import { monthTitle } from '../ui/format';
+import { COPYRIGHT } from '../licensing/CopyrightFooter';
 import { businessDetailTable, businessMonthTable, employeeMonthTable, type Cell, type Table } from './tables';
 
 export type ExportFormat = 'xlsx' | 'csv';
@@ -151,7 +152,7 @@ async function emit(format: ExportFormat, baseName: string, tables: Table[], met
 }
 
 const generatedLine = (bizName: string) =>
-  `${bizName} · הופק ${new Date().toLocaleString('he-IL', { timeZone: 'Asia/Jerusalem' })} · נתוני נוכחות ושעות בלבד – אינו תלוש שכר · ${POLICY_LINE}`;
+  `${bizName} · הופק ${new Date().toLocaleString('he-IL', { timeZone: 'Asia/Jerusalem' })} · נתוני נוכחות ושעות בלבד – אינו תלוש שכר · ${POLICY_LINE} · ${COPYRIGHT}`;
 
 /** Calculation basis printed on every export so the figures can be audited. */
 const POLICY_LINE = `תקן יומי: שבוע של 5 ימים ${formatHM(OFFICE_POLICY.FIVE_DAY_DAILY_MINUTES)} (מדיניות המשרד), יום מקוצר ${formatHM(LAW.FIVE_DAY_SHORT_MINUTES)}; שבוע של 6 ימים ${formatHM(LAW.SIX_DAY_NORMAL_MINUTES)}, שישי ${formatHM(LAW.SEVEN_HOUR_DAY_MINUTES)}; תקן שבועי ${formatHM(LAW.WEEKLY_REGULAR_MINUTES)}`;

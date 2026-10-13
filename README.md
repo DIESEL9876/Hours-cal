@@ -92,7 +92,7 @@ warning ("More info" → "Run anyway"). Configure `bundle > windows > signComman
 ```bash
 npm test                   # Vitest: engine, storage/repository, input parsing
 npm run test:e2e           # Playwright: real UI workflow in Chromium
-npm run test:rust          # Rust storage layer (needs webkit2gtk dev libs on Linux)
+npm run test:rust          # licensing crates + Rust storage layer (needs webkit2gtk dev libs on Linux)
 ```
 
 - **Engine:** the 15 mandatory scenarios plus extended cases: leap years, month lengths, DST, minute boundaries,
@@ -106,6 +106,19 @@ npm run test:rust          # Rust storage layer (needs webkit2gtk dev libs on Li
 - **E2E:** create businesses → employee → enter shifts (incl. overnight, shortened day, invalid and incomplete input)
   → explanation → undo/redo → confirm breaks → reload persistence → CSV/XLSX export re-parsed and matched to screen
   totals → finalisation and change detection → business isolation → archive protection → backup/restore.
+
+## Licensing and legal agreement (since 1.1.3)
+
+- **Agreement:** a Hebrew EULA, Terms of Use and Privacy Policy (`legal/agreement_he.md`) must be accepted on first run and once after every version update. The acceptance record is stored locally, separately from business data.
+- **Licences:** Ed25519-signed and offline, bound to a device ID derived from the Windows MachineGuid (`crates/hourscal-license`). If a licence becomes invalid, a read-only recovery export is available.
+- **Owner tool:** `crates/hourscal-license-tool` is OWNER-ONLY and is never shipped. Build it with
+  `cargo build --release -p hourscal-license-tool`.
+- **Staged enforcement:** the licence requirement is enabled only when the owner's PUBLIC key is placed in `src-tauri/keys/license_public_key.txt`.
+- **Secrets:** private keys, issued licences and the issuance log are git-ignored and never bundled.
+- **Owner guide (Hebrew):** [`docs/LICENSING_OWNER_GUIDE_HE.md`](docs/LICENSING_OWNER_GUIDE_HE.md). Integration notes: [`docs/LICENSING_INTEGRATION.md`](docs/LICENSING_INTEGRATION.md).
+- **Release gate:** `npm run check:release` must pass before public distribution. It requires the contact email and the public key.
+
+© 2026 עילי נגר | כל הזכויות שמורות
 
 ## Data and privacy
 

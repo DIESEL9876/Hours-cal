@@ -10,6 +10,20 @@ export interface AcceptanceRecord {
   schema_version: number; installation_id: string; app_version: string; legal_doc_version: string;
   legal_sha256: string; accepted_at_utc: string; local_utc_offset_minutes: number | null;
 }
+/** Licence status for the "מסמכים משפטיים ורישיון" page (Hours-Cal integration). */
+export interface LicenseStatus {
+  /** True when this build embeds the owner's public key (licence required). */
+  enforced: boolean;
+  deviceId: string;
+  deviceFallback: boolean;
+  licenseId: string | null;
+  licensee: string | null;
+  organization: string | null;
+  expiresAt: string | null;
+  /** valid | pending (not enforced yet, signature checked later) | invalid | none */
+  state: "valid" | "pending" | "invalid" | "none";
+  messageHe: string | null;
+}
 export interface TableSummary { table: string; rows: number }
 export interface ExportReport { folder: string; tables: TableSummary[]; sqlite_copy: string }
 
@@ -27,4 +41,6 @@ export interface LicensingApi {
   recoveryTables(): Promise<TableSummary[]>;
   pickFolderAndExport(): Promise<ExportReport | null>;
   copyText(text: string): Promise<void>;
+  /** Optional so test doubles written before the integration remain valid. */
+  licenseStatus?(): Promise<LicenseStatus>;
 }

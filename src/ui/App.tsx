@@ -1,7 +1,9 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
 import type { Repository } from '../data/repo';
 import { UiProvider } from './components';
-import { IconBook, IconClock, IconDatabase } from './icons';
+import { IconBook, IconClock, IconDatabase, IconShield } from './icons';
+import { LegalLicenseScreen } from './screens/LegalLicense';
+import { COPYRIGHT, type LicensingApi } from '../licensing';
 import { BusinessesScreen } from './screens/Businesses';
 import { EmployeesScreen } from './screens/Employees';
 import { AttendanceScreen } from './screens/Attendance';
@@ -15,6 +17,7 @@ export type Route =
   | { name: 'attendance'; businessId: string; employeeId: string }
   | { name: 'summary'; businessId: string }
   | { name: 'backups' }
+  | { name: 'legalLicense' }
   | { name: 'legal' };
 
 export interface YearMonth {
@@ -46,7 +49,7 @@ function initialYm(): YearMonth {
   return { year: d.getFullYear(), month: d.getMonth() + 1 };
 }
 
-export function App({ repo }: { repo: Repository }) {
+export function App({ repo, licensing = null }: { repo: Repository; licensing?: LicensingApi | null }) {
   const [route, setRoute] = useState<Route>({ name: 'businesses' });
   const [ym, setYm] = useState<YearMonth>(initialYm);
   const [dataVersion, setDataVersion] = useState(0);
@@ -74,6 +77,9 @@ export function App({ repo }: { repo: Repository }) {
     case 'backups':
       screen = <BackupsScreen />;
       break;
+    case 'legalLicense':
+      screen = licensing ? <LegalLicenseScreen api={licensing} /> : null;
+      break;
     case 'legal':
       screen = <LegalScreen />;
       break;
@@ -95,6 +101,11 @@ export function App({ repo }: { repo: Repository }) {
                 <NavLink active={route.name === 'legal'} onClick={() => setRoute({ name: 'legal' })} icon={<IconBook size={16} />}>
                   כללי החישוב
                 </NavLink>
+                {licensing && (
+                  <NavLink active={route.name === 'legalLicense'} onClick={() => setRoute({ name: 'legalLicense' })} icon={<IconShield size={16} />}>
+                    מסמכים משפטיים ורישיון
+                  </NavLink>
+                )}
                 <NavLink active={route.name === 'backups'} onClick={() => setRoute({ name: 'backups' })} icon={<IconDatabase size={16} />}>
                   גיבוי ונתונים
                 </NavLink>
@@ -102,6 +113,9 @@ export function App({ repo }: { repo: Repository }) {
             </div>
           </header>
           <main className="mx-auto w-full max-w-[1600px] flex-1 px-6 py-6">{screen}</main>
+          <footer className={`no-print px-6 py-3 text-center text-[12px] text-ink-soft ${route.name === 'attendance' ? 'pb-28' : ''}`} data-testid="copyright-footer">
+            {COPYRIGHT} · Hours-Cal גרסה {__APP_VERSION__}
+          </footer>
         </div>
       </UiProvider>
     </AppContext.Provider>

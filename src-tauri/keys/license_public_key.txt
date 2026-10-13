@@ -1,0 +1,6 @@
+# Hours-Cal licence PUBLIC key file.
+#
+# NOT CONFIGURED: this build does not require a licence (the legal agreement is still required
+# once per version). To enable the licence requirement, replace this file with the
+# license_public_key.txt created by `hourscal-license-tool keygen` on the owner's computer.
+# PUBLIC key only — the PRIVATE key must never be placed in this repository or in the installer.

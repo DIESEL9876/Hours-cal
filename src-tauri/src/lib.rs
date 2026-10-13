@@ -1,42 +1,54 @@
 mod db;
+mod licensing;
 
 use db::{BackupInfo, Db, Stmt};
 use serde_json::{Map, Value};
-use tauri::{Manager, State};
+use std::sync::OnceLock;
+use tauri::State;
 
-#[tauri::command]
-fn db_select(db: State<'_, Db>, sql: String, params: Vec<Value>) -> Result<Vec<Map<String, Value>>, String> {
-    db.select(&sql, &params)
+/// The business database. Opened only after the licensing gate reports Ready
+/// (see `licensing::on_ready`); until then every data command is refused.
+pub struct DbState(pub OnceLock<Db>);
+
+fn db<'a>(state: &'a State<'_, DbState>) -> Result<&'a Db, String> {
+    licensing::require_ready()?;
+    state.0.get().ok_or_else(|| "DB_NOT_OPEN".to_string())
 }
 
 #[tauri::command]
-fn db_batch(db: State<'_, Db>, statements: Vec<Stmt>) -> Result<(), String> {
-    db.batch(&statements)
+fn db_select(state: State<'_, DbState>, sql: String, params: Vec<Value>) -> Result<Vec<Map<String, Value>>, String> {
+    db(&state)?.select(&sql, &params)
 }
 
 #[tauri::command]
-fn backup_create(db: State<'_, Db>, reason: String) -> Result<BackupInfo, String> {
-    db.create_backup(&reason)
+fn db_batch(state: State<'_, DbState>, statements: Vec<Stmt>) -> Result<(), String> {
+    db(&state)?.batch(&statements)
 }
 
 #[tauri::command]
-fn backup_list(db: State<'_, Db>) -> Result<Vec<BackupInfo>, String> {
-    db.list_backups()
+fn backup_create(state: State<'_, DbState>, reason: String) -> Result<BackupInfo, String> {
+    db(&state)?.create_backup(&reason)
 }
 
 #[tauri::command]
-fn backup_restore(db: State<'_, Db>, name: String) -> Result<(), String> {
-    db.restore_backup(&name)
+fn backup_list(state: State<'_, DbState>) -> Result<Vec<BackupInfo>, String> {
+    db(&state)?.list_backups()
 }
 
 #[tauri::command]
-fn db_location(db: State<'_, Db>) -> String {
-    db.path.to_string_lossy().to_string()
+fn backup_restore(state: State<'_, DbState>, name: String) -> Result<(), String> {
+    db(&state)?.restore_backup(&name)
+}
+
+#[tauri::command]
+fn db_location(state: State<'_, DbState>) -> Result<String, String> {
+    Ok(db(&state)?.path.to_string_lossy().to_string())
 }
 
 /// Writes an export file to a path the user picked in the native save dialog.
 #[tauri::command]
 fn write_export_file(path: String, contents: Vec<u8>) -> Result<(), String> {
+    licensing::require_ready()?;
     let lower = path.to_lowercase();
     if !(lower.ends_with(".xlsx") || lower.ends_with(".csv") || lower.ends_with(".html")) {
         return Err("סוג קובץ לא נתמך".into());
@@ -48,15 +60,8 @@ fn write_export_file(path: String, contents: Vec<u8>) -> Result<(), String> {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        .setup(|app| {
-            let dir = app.path().app_data_dir().expect("no app data dir");
-            let db = Db::open(&dir).map_err(|e| Box::<dyn std::error::Error>::from(e))?;
-            if let Err(e) = db.auto_backup() {
-                eprintln!("auto backup failed: {e}");
-            }
-            app.manage(db);
-            Ok(())
-        })
+        // The database is NOT opened here any more: it opens in licensing::on_ready.
+        .manage(DbState(OnceLock::new()))
         .invoke_handler(tauri::generate_handler![
             db_select,
             db_batch,
@@ -64,7 +69,19 @@ pub fn run() {
             backup_list,
             backup_restore,
             db_location,
-            write_export_file
+            write_export_file,
+            licensing::licensing_startup_route,
+            licensing::legal_document,
+            licensing::legal_accept,
+            licensing::legal_history,
+            licensing::legal_accepted_text,
+            licensing::legal_decline_and_exit,
+            licensing::license_device_id,
+            licensing::license_activate,
+            licensing::license_import_file,
+            licensing::license_status,
+            licensing::recovery_tables,
+            licensing::recovery_export,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

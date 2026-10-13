@@ -21,4 +21,5 @@ export const tauriLicensingApi: LicensingApi = {
     return typeof dir === "string" ? invoke("recovery_export", { outDir: dir }) : null;
   },
   copyText: (t) => navigator.clipboard.writeText(t),
+  licenseStatus: () => invoke("license_status"),
 };

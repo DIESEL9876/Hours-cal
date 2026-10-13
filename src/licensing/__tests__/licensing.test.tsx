@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { readFileSync } from "node:fs";
@@ -7,7 +8,7 @@ import { LicensingGate } from "../LicensingGate";
 import { LegalSettingsPanel } from "../LegalSettingsPanel";
 import type { LicensingApi, Route } from "../types";
 
-const TEXT = readFileSync(resolve(__dirname, "../../../../legal/agreement_he.md"), "utf8")
+const TEXT = readFileSync(resolve(__dirname, "../../../legal/agreement_he.md"), "utf8")
   .replaceAll("{{CONTACT_EMAIL}}", "legal@example.com");
 const READY: Route = { route: "ready", licensee: "עילי נגר", organization: null, licenseId: "HCL-2026-AAAAA", expiresAt: null };
 const ACTIVATION: Route = { route: "activation", deviceId: "HC1-AAAA-BBBB-CCCC-DDDD-EEEE-FFFF", reasonHe: null, recoveryAvailable: true };

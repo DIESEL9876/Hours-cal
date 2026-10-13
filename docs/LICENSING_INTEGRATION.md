@@ -93,3 +93,20 @@ If the app uses Tauri v1, change these in `licensing.rs`:
 - `app.path().app_cache_dir()` → `app.path_resolver().app_cache_dir()`
 - `@tauri-apps/api/core` → `@tauri-apps/api/tauri`
 - `plugin-dialog` → `@tauri-apps/api/dialog`
+
+---
+
+## Integration status in this repository (Hours-Cal 1.1.3)
+
+Done, with these project-specific decisions:
+
+| Item | How it was integrated |
+|---|---|
+| Crates | `crates/hourscal-license`, `crates/hourscal-license-tool`; root `Cargo.toml` workspace (`exclude = ["src-tauri"]`). `rusqlite` aligned to 0.32 (same bundled SQLite as the app). |
+| `business_db_path` | `%APPDATA%\il.office.hourscal\hours-cal.sqlite3` (`app_data_dir()/DB_FILE`, unchanged location). |
+| `on_ready` | Opens `db::Db` and runs the daily auto-backup. The DB is no longer opened in `setup()`. `READY` flips only after the DB is open, under a lock, so a racing second startup call cannot reach an unopened DB. Schema migrations still run from the frontend after the gate opens. |
+| Guards | `db_select`, `db_batch`, `backup_*`, `db_location` and `write_export_file` all call `licensing::require_ready()`. |
+| Staged enforcement | `crates/hourscal-license/src/enforcement.rs`. With no key line in `src-tauri/keys/license_public_key.txt`, the licence is not required, but the agreement is still required once per version. A licence can be pre-installed (format, device and dates checked); its signature is verified on every start once a key is embedded. A malformed key file fails closed. Covered by tests in `tests/staged_enforcement.rs`. |
+| Frontend | `main.tsx` wraps the app in `LicensingGate` in the desktop app. The repository is opened only after the gate opens. The "מסמכים משפטיים ורישיון" page (`LicenseStatusPanel` + `LegalSettingsPanel`) is in the top navigation. The copyright notice appears in the app footer, in print headers and in the XLSX subtitle. Design tokens are mapped in `src/styles.css`. |
+| Backups | Unchanged. They copy only the SQLite DB (`VACUUM INTO`). Licensing state lives under `%LOCALAPPDATA%` and is never touched. |
+| Release gate | `npm run check:release` fails until the contact email and the public key are both set. |

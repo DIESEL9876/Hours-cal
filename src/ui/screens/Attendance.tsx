@@ -27,6 +27,7 @@ import { MonthPicker } from '../MonthPicker';
 import { formatDateHe, hm, monthTitle, shekels, STATUS_LABELS, STATUS_OPTIONS } from '../format';
 import { buildTimestamps, normalizeTimeInput, parseBreakInput } from '../timeEntry';
 import { exportEmployeeMonth } from '../../export/exporters';
+import { COPYRIGHT } from '../../licensing/CopyrightFooter';
 
 type Op =
   | { kind: 'shift'; before: ShiftInput | null; after: ShiftInput | null }
@@ -276,6 +277,7 @@ export function AttendanceScreen({ businessId, employeeId }: { businessId: strin
       <div className="print-only mb-3">
         <div className="text-[18px] font-bold">{title}</div>
         <div className="text-[12px]">{business.name}</div>
+        <div className="text-[10px]">{COPYRIGHT}</div>
       </div>
 
       <div className="print-full overflow-auto rounded-xl border border-line bg-white shadow-[0_1px_2px_rgba(15,27,45,0.04)]" style={{ maxHeight: 'calc(100vh - 260px)' }}>

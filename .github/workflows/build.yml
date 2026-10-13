@@ -26,6 +26,8 @@ jobs:
         run: |
           npx playwright install --with-deps chromium
           npm run test:e2e
+      - name: Licensing crates (Ed25519 licences, legal acceptance, recovery, owner tool)
+        run: cargo test --workspace
       - name: Rust storage tests
         run: |
           sudo apt-get update
