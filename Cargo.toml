@@ -1,8 +1,8 @@
 [workspace]
 resolver = "2"
-members = ["crates/hourscal-license", "crates/hourscal-license-tool"]
+members = ["crates/hourscal-license", "crates/hourscal-license-tool", "crates/hourscal-license-manager"]
 # The Tauri app is a separate package (own Cargo.lock / target dir); it depends on crates/hourscal-license by path.
-exclude = ["src-tauri"]
+exclude = ["src-tauri", "license-manager/src-tauri"]
 
 [workspace.package]
 edition = "2021"
