@@ -1,0 +1,2 @@
+# One revoked/replaced licence ID per line (e.g. HCL-2026-AB12C).
+# Takes effect in the NEXT app release built with this file.

@@ -8,3 +8,9 @@ playwright-report
 .vite
 release/
 *.tsbuildinfo
+
+# Licensing — secrets and issued licences must never be committed
+*.PRIVATE.txt
+issued-licenses.csv
+*.hclic
+/target

@@ -1,0 +1,17 @@
+[package]
+name = "hourscal-license-tool"
+version = "1.0.0"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "OWNER-ONLY offline license issuer for Hours-Cal. Never ship with the app."
+
+[[bin]]
+name = "hourscal-license-tool"
+path = "src/main.rs"
+
+[dependencies]
+hourscal-license = { path = "../hourscal-license" }
+ed25519-dalek = { version = "2.1", features = ["rand_core"] }
+base64 = "0.22"
+getrandom = "0.2"
