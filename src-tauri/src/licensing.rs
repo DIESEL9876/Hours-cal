@@ -315,3 +315,30 @@ pub fn recovery_export(app: AppHandle, out_dir: String) -> Result<ExportReport, 
         .map_err(|e| e.to_string())?;
     snap.export_all(std::path::Path::new(&out_dir)).map_err(|e| e.to_string())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The owner's production key (generated on the owner's computer; only the PUBLIC key is here).
+    /// Changing the embedded key file must be a deliberate act that also updates this test.
+    const OWNER_KEY_ID: &str = "k-18f8a7361591e8b5";
+
+    #[test]
+    fn licence_requirement_is_enforced_with_the_owner_production_key() {
+        let k = parse_key_file(PUBLIC_KEY_TEXT);
+        assert!(k.enforced(), "this build must require a licence");
+        let trusted = k.trusted();
+        assert_eq!(trusted.len(), 1, "exactly one trusted key");
+        assert_eq!(hourscal_license::license::key_id(&trusted[0]), OWNER_KEY_ID);
+        assert!(PUBLIC_KEY_TEXT.contains(OWNER_KEY_ID), "file header names the same key");
+    }
+
+    #[test]
+    fn no_private_key_material_is_embedded() {
+        assert!(!PUBLIC_KEY_TEXT.to_ascii_uppercase().contains("PRIVATE KEY"));
+        let lines: Vec<&str> = PUBLIC_KEY_TEXT.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with('#')).collect();
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].len(), 43, "a 32-byte public key in base64url");
+    }
+}

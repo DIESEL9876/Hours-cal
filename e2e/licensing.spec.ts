@@ -72,7 +72,7 @@ test('agreement is required before any business data is shown; the app works nor
   // Not enforced yet: straight to the business list; data features work.
   await expect(page.getByRole('heading', { name: 'ניהול עסקים' })).toBeVisible();
   await expect(page.getByTestId('copyright-footer')).toContainText('© 2026 עילי נגר | כל הזכויות שמורות');
-  await expect(page.getByTestId('copyright-footer')).toContainText('1.1.3');
+  await expect(page.getByTestId('copyright-footer')).toContainText('1.1.4');
   await page.getByRole('button', { name: 'הקמת עסק חדש' }).first().click();
   await page.getByTestId('business-name-input').fill('עסק לאחר אישור');
   await page.getByRole('button', { name: 'הקמת העסק' }).click();

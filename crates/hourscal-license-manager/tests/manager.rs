@@ -445,10 +445,9 @@ fn own_computer_activation_workflow_before_enforcement() {
     let hclic = std::fs::read_to_string(&issued.file_path).unwrap();
     let exported = std::fs::read_to_string(m.vault.public_key_path()).unwrap();
 
-    // Hours-Cal as shipped today: the repository key file has no key line → not enforced.
-    let repo_key_file = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../src-tauri/keys/license_public_key.txt")).unwrap();
-    let current = parse_key_file(&repo_key_file);
-    assert!(matches!(current, KeyConfig::NotConfigured), "the shipped Hours-Cal must not enforce yet");
+    // Hours-Cal 1.1.3 as shipped: its key file had no key line → not enforced.
+    let current = parse_key_file("# Hours-Cal licence PUBLIC key file.\n# NOT CONFIGURED\n");
+    assert!(matches!(current, KeyConfig::NotConfigured));
 
     let app = Tmp::new("hourscal-config");
     let doc = LegalDocument::render(AGREEMENT_TEMPLATE, "1.0", "");
