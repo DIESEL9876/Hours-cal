@@ -7,6 +7,7 @@ import {
   SIX_DAY_WORKDAYS,
   type CustomProfile,
   type EmployeeSettings,
+  type FridayOvertimePolicy,
   type Weekday,
 } from '../engine';
 import { Checkbox, Field, Segmented, Select } from './components';
@@ -43,7 +44,24 @@ function MinutesInput({ value, onChange, min = 0 }: { value: number; onChange: (
   );
 }
 
-export function SettingsEditor({ value, onChange }: { value: EmployeeSettings; onChange: (s: EmployeeSettings) => void }) {
+export const FRIDAY_OVERTIME_LABELS: Record<FridayOvertimePolicy, string> = {
+  all_overtime: 'כל שעות יום שישי כשעות נוספות',
+  none: 'ללא תוספת אוטומטית לשעות יום שישי',
+};
+
+export function SettingsEditor({
+  value,
+  onChange,
+  scope = 'employee',
+  businessFriday = 'none',
+}: {
+  value: EmployeeSettings;
+  onChange: (s: EmployeeSettings) => void;
+  /** 'business' edits the business defaults; 'employee' may also inherit the business Friday setting. */
+  scope?: 'business' | 'employee';
+  /** Current business Friday setting (shown next to "לפי הגדרת העסק"). */
+  businessFriday?: FridayOvertimePolicy;
+}) {
   const s = value;
   const set = (patch: Partial<EmployeeSettings>) => onChange({ ...s, ...patch });
   const p = s.companyBreakPolicy;
@@ -138,6 +156,33 @@ export function SettingsEditor({ value, onChange }: { value: EmployeeSettings; o
             />
           </Field>
         )}
+        <div className="mt-3" data-testid="friday-overtime">
+          <span className="mb-1.5 block text-[13px] font-medium">חישוב שעות נוספות ביום שישי</span>
+          {scope === 'business' ? (
+            <Segmented<FridayOvertimePolicy>
+              value={s.fridayOvertime === 'all_overtime' ? 'all_overtime' : 'none'}
+              onChange={(v) => set({ fridayOvertime: v })}
+              options={[
+                { value: 'all_overtime', label: FRIDAY_OVERTIME_LABELS.all_overtime },
+                { value: 'none', label: FRIDAY_OVERTIME_LABELS.none },
+              ]}
+            />
+          ) : (
+            <Segmented<FridayOvertimePolicy | 'inherit'>
+              value={s.fridayOvertime ?? 'inherit'}
+              onChange={(v) => set({ fridayOvertime: v })}
+              options={[
+                { value: 'inherit', label: `לפי הגדרת העסק (${businessFriday === 'all_overtime' ? 'כשעות נוספות' : 'ללא תוספת'})` },
+                { value: 'all_overtime', label: FRIDAY_OVERTIME_LABELS.all_overtime },
+                { value: 'none', label: FRIDAY_OVERTIME_LABELS.none },
+              ]}
+            />
+          )}
+          <span className="mt-1 block text-[12px] leading-snug text-ink-soft">
+            חל על שבוע עבודה בן 5 ימים בלבד. "כל שעות יום שישי": כל שעת עבודה נטו בשישי – שעתיים ראשונות 125%, היתר 150%, גם מתחת ל-42 שעות שבועיות; תוספות מנוחה וחג נשמרות.
+            {scope === 'business' && ' ברירת מחדל לעובדים המוגדרים "לפי הגדרת העסק"; שינוי חל מהחודש שאחרי החודש האחרון שנסגר סופית.'}
+          </span>
+        </div>
         <div className="mt-3 grid grid-cols-2 gap-3">
           <Field label="סוג עבודה" hint="משפיע על בדיקת ההפסקה המינימלית לעובדי כפיים">
             <Select value={s.workType} onChange={(v) => set({ workType: v })} options={[{ value: 'non_manual', label: 'עבודה שאינה עבודת כפיים' }, { value: 'manual', label: 'עבודת כפיים / פיזית' }]} />

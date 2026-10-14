@@ -94,6 +94,24 @@ overtime tier: first 120 overtime minutes of the day (per_day) → 125%, rest �
 The week is never reset at a month boundary. Data from adjacent months is always loaded
 (`requiredDataRange`), so the result for a day is identical whichever month is opened (tested).
 
+### 4.7 Office policy: Friday in a five-day week (since 1.1.6)
+
+This is an **office policy**, not a statutory rule. It is set as a business default ("חישוב שעות נוספות ביום שישי").
+Each employee either inherits it ("לפי הגדרת העסק") or overrides it in their effective-dated settings.
+
+- **"כל שעות יום שישי כשעות נוספות"** — five-day-week employees only. Every net minute of a Friday row is overtime.
+  - Breaks are deducted first.
+  - The first 2 hours are 125%, the rest 150%. This holds even when the week is below 42 hours.
+  - These minutes never consume the weekly regular allowance, so they cannot be counted again as weekly overtime.
+  - Weekly-rest / holiday premiums stay attached to the minute: after Friday sunset → 175%/200%, on a holiday → 175%/200%.
+    The policy can only raise the rate.
+  - Exempt / minor profiles are not affected (no overtime classification).
+- **"ללא תוספת אוטומטית לשעות יום שישי"** (and the default for all data created before 1.1.6): exactly the earlier classification.
+  Statutory daily / weekly overtime and weekly-rest rules still apply.
+- **Six-day-week employees:** never affected.
+- **Changing the business default:** it takes effect from the month after the business's last finalised month.
+  Finalised months are never recalculated.
+
 ## 5. Night work
 
 | # | Rule | Status |

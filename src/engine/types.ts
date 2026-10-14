@@ -104,6 +104,27 @@ export interface EmployeeSettings {
   restBetweenShiftsWarnMinutes: number;
   /** Hebcal city name used for sunset / nightfall (e.g. 'Tel Aviv', 'Jerusalem'). */
   location: string;
+  /**
+   * Friday overtime policy (five-day week only). Employees: 'inherit' (or absent) = the business setting.
+   * Absent everywhere = 'none', i.e. unchanged behaviour for data created before version 1.1.6.
+   */
+  fridayOvertime?: FridayOvertimePolicy | 'inherit';
+  /** Business defaults only: when the business Friday policy changed (see repo.updateBusiness). */
+  fridayOvertimeHistory?: FridayPolicyChange[];
+}
+
+/**
+ * Office policy for Friday in a FIVE-day week (version 1.1.6):
+ * 'all_overtime' — every net minute worked on Friday is overtime (first 2 hours 125%, then 150%),
+ *                  whatever the weekly total; weekly-rest / holiday premiums are kept on top.
+ * 'none'         — no automatic Friday overtime (the behaviour of every earlier version).
+ */
+export type FridayOvertimePolicy = 'all_overtime' | 'none';
+
+/** Business-level Friday policy over time (changes never reach back into finalised months). */
+export interface FridayPolicyChange {
+  from: LocalDate;
+  value: FridayOvertimePolicy;
 }
 
 export interface SettingsVersion {
@@ -243,6 +264,8 @@ export interface DayResult {
   explanation: string[];
   /** Indicative pay in agorot (null when no hourly rate). */
   payAgorot: number | null;
+  /** Set only when the Friday "all hours are overtime" policy classified this day. */
+  fridayOvertimeApplied?: boolean;
 }
 
 export interface WeekResult {
@@ -283,6 +306,8 @@ export interface EmployeePeriodInput {
   /** Reporting range (inclusive). The engine internally expands to whole Sunday–Saturday weeks. */
   from: LocalDate;
   to: LocalDate;
+  /** Business Friday policy history, used for employees whose setting is 'inherit'. Absent = 'none'. */
+  businessFriday?: FridayPolicyChange[];
 }
 
 export interface EmployeePeriodResult {

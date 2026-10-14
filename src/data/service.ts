@@ -2,6 +2,7 @@
  * Glue between stored (entered) data and the pure calculation engine.
  */
 import {
+  businessFridayHistory,
   calculateBusinessMonthlySummary,
   calculateEmployeePeriod,
   monthRange,
@@ -21,13 +22,14 @@ export async function loadEmployeeInput(
   to: LocalDate,
 ): Promise<EmployeePeriodInput> {
   const range = requiredDataRange(from, to);
-  const [settingsVersions, shifts, entries, customHolidays] = await Promise.all([
+  const [settingsVersions, shifts, entries, customHolidays, business] = await Promise.all([
     repo.getSettingsVersions(employeeId),
     repo.getShifts(businessId, employeeId, range.from, range.to),
     repo.getDayEntries(businessId, employeeId, range.from, range.to),
     repo.listCustomHolidays(businessId),
+    repo.getBusiness(businessId),
   ]);
-  return { employeeId, settingsVersions, shifts, dayStatuses: toDayStatuses(entries), customHolidays, from, to };
+  return { employeeId, settingsVersions, shifts, dayStatuses: toDayStatuses(entries), customHolidays, from, to, businessFriday: businessFridayHistory(business.defaults) };
 }
 
 export async function computeEmployeeMonth(

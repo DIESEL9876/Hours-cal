@@ -1,4 +1,4 @@
-import type { CompanyBreakPolicy, EmployeeSettings, LocalDate, SettingsVersion, Weekday } from './types';
+import type { CompanyBreakPolicy, EmployeeSettings, FridayOvertimePolicy, FridayPolicyChange, LocalDate, SettingsVersion, Weekday } from './types';
 import { DEFAULT_LOCATION } from './calendar';
 
 /** Statutory / extension-order constants for the general private-sector profile (see docs/LEGAL_RULES.md). */
@@ -88,6 +88,36 @@ export function resolveSettings(versions: SettingsVersion[], date: LocalDate): S
     if (v.effectiveFrom <= date && (!best || v.effectiveFrom > best.effectiveFrom)) best = v;
   }
   return best;
+}
+
+// ---------------------------------------------------------------------------
+// Friday overtime policy (five-day week) — business default with employee override
+// ---------------------------------------------------------------------------
+
+/** Business Friday policy history (legacy businesses without the setting → empty = 'none'). */
+export function businessFridayHistory(defaults: EmployeeSettings): FridayPolicyChange[] {
+  if (defaults.fridayOvertimeHistory?.length) return defaults.fridayOvertimeHistory;
+  return defaults.fridayOvertime === 'all_overtime' ? [{ from: BEGINNING_OF_TIME, value: 'all_overtime' }] : [];
+}
+
+/** Business policy in force on a date. */
+export function businessFridayOn(history: FridayPolicyChange[] | undefined, date: LocalDate): FridayOvertimePolicy {
+  let value: FridayOvertimePolicy = 'none';
+  let best = '';
+  for (const h of history ?? []) {
+    if (h.from <= date && h.from >= best) {
+      value = h.value;
+      best = h.from;
+    }
+  }
+  return value;
+}
+
+/** Effective Friday policy for an employee on a date: own explicit choice, else the business setting. */
+export function fridayPolicyOn(settings: EmployeeSettings, date: LocalDate, businessHistory: FridayPolicyChange[] | undefined): FridayOvertimePolicy {
+  const own = settings.fridayOvertime;
+  if (own === 'all_overtime' || own === 'none') return own;
+  return businessFridayOn(businessHistory, date);
 }
 
 export function validateSettings(s: EmployeeSettings): string[] {

@@ -31,7 +31,7 @@ import type {
 } from './types';
 import { CalendarContext, type Interval } from './calendar';
 import { calculateDeductibleBreakMinutes, calculateNetWorkedMinutes } from './breaks';
-import { LAW, OFFICE_POLICY, resolveSettings } from './settings';
+import { fridayPolicyOn, LAW, OFFICE_POLICY, resolveSettings } from './settings';
 import {
   addDays,
   eachDate,
@@ -435,8 +435,10 @@ interface DayWork {
   result: DayResult;
   minutes: WorkedMinute[];
   threshold: ThresholdInfo | null;
-  od: { daily125: number; daily150: number; weekly125: number; weekly150: number };
+  od: { daily125: number; daily150: number; weekly125: number; weekly150: number; friday125: number; friday150: number };
   payUnits: number | null;
+  /** Five-day week, Friday, office policy "all Friday hours are overtime". */
+  fridayAll: boolean;
 }
 
 export function calculateEmployeePeriod(input: EmployeePeriodInput): EmployeePeriodResult {
@@ -505,8 +507,9 @@ export function calculateEmployeePeriod(input: EmployeePeriodInput): EmployeePer
       result: dr,
       minutes: [],
       threshold: null,
-      od: { daily125: 0, daily150: 0, weekly125: 0, weekly150: 0 },
+      od: { daily125: 0, daily150: 0, weekly125: 0, weekly150: 0, friday125: 0, friday150: 0 },
       payUnits: null,
+      fridayAll: false,
     });
   }
 
@@ -561,8 +564,10 @@ export function calculateEmployeePeriod(input: EmployeePeriodInput): EmployeePer
       dr.holidayEve = t.holidayEve;
       dr.dailyThresholdMinutes = t.minutes;
       dr.thresholdReasons = t.reasons;
+      dw.fridayAll = s.workweek === 'five' && dr.weekday === 5 && t.minutes !== null && fridayPolicyOn(s, dr.date, input.businessFriday) === 'all_overtime';
       if (dr.worked) {
-        if (!t.scheduled && s.legalProfile !== 'exempt' && s.legalProfile !== 'minor')
+        if (dw.fridayAll) dr.fridayOvertimeApplied = true;
+        else if (!t.scheduled && s.legalProfile !== 'exempt' && s.legalProfile !== 'minor')
           warn(
             dr.warnings,
             'UNSCHEDULED_DAY_WORK',
@@ -612,7 +617,17 @@ export function calculateEmployeePeriod(input: EmployeePeriodInput): EmployeePer
       dw.minutes.forEach((m, i) => {
         const countsWeekly = s.restMinutesCountTowardWeekly || m.premium === 'none';
         let tier: Tier;
-        if (i >= t.minutes!) {
+        if (dw.fridayAll) {
+          // Office policy: every net Friday minute is overtime — first 2 hours 125%, then 150% — whatever
+          // the weekly total. Never counted as regular, so weekly overtime cannot count it again. The
+          // minute keeps its weekly-rest / holiday premium (bucketKey below), which only raises the rate.
+          tier = dayOtCount < t.firstTierMinutes ? 'ot125' : 'ot150';
+          dayOtCount++;
+          dailyOtCount++;
+          dr.dailyOvertimeMinutes++;
+          if (tier === 'ot125') dw.od.friday125++;
+          else dw.od.friday150++;
+        } else if (i >= t.minutes!) {
           // daily overtime
           const idx = s.weeklyOvertimeTiering === 'per_week' ? dailyOtCount : dayOtCount;
           tier = idx < t.firstTierMinutes ? 'ot125' : 'ot150';
@@ -774,15 +789,26 @@ function buildExplanation(dw: DayWork) {
     lines.push('לא בוצע סיווג לשעות נוספות לפי הפרופיל החוקי של העובד.');
     return;
   }
-  const { daily125, daily150, weekly125, weekly150 } = dw.od;
-  const parts: string[] = [];
-  if (daily125) parts.push(`${formatDurationHe(daily125)} נוספות בתעריף 125%`);
-  if (daily150) parts.push(`${formatDurationHe(daily150)} נוספות בתעריף 150%`);
-  lines.push(
-    `תקן היום הוא ${formatDurationHe(t.minutes)}` +
-      (parts.length ? `, ולכן חושבו ${parts.join(' ו-')}.` : dr.netMinutes > t.minutes ? '.' : ', ולא חושבו שעות נוספות יומיות.'),
-  );
-  if (t.reasons.length) lines.push(`בסיס התקן: ${t.reasons.join('; ')}.`);
+  if (dw.fridayAll) {
+    const fp: string[] = [];
+    if (dw.od.friday125) fp.push(`${formatDurationHe(dw.od.friday125)} בתעריף 125%`);
+    if (dw.od.friday150) fp.push(`${formatDurationHe(dw.od.friday150)} בתעריף 150%`);
+    lines.push(
+      `לפי הגדרת "כל שעות יום שישי כשעות נוספות" (שבוע עבודה בן 5 ימים) כל שעות העבודה נטו ביום שישי סווגו כשעות נוספות: ${fp.join(' ו-')}. ` +
+        'הסיווג אינו תלוי במכסה השבועית, ודקות אלה לא נספרו פעמיים כשעות נוספות שבועיות.',
+    );
+  } else {
+    const { daily125, daily150 } = dw.od;
+    const parts: string[] = [];
+    if (daily125) parts.push(`${formatDurationHe(daily125)} נוספות בתעריף 125%`);
+    if (daily150) parts.push(`${formatDurationHe(daily150)} נוספות בתעריף 150%`);
+    lines.push(
+      `תקן היום הוא ${formatDurationHe(t.minutes)}` +
+        (parts.length ? `, ולכן חושבו ${parts.join(' ו-')}.` : dr.netMinutes > t.minutes ? '.' : ', ולא חושבו שעות נוספות יומיות.'),
+    );
+    if (t.reasons.length) lines.push(`בסיס התקן: ${t.reasons.join('; ')}.`);
+  }
+  const { weekly125, weekly150 } = dw.od;
   if (weekly125 || weekly150) {
     const wp: string[] = [];
     if (weekly125) wp.push(`${formatDurationHe(weekly125)} בתעריף 125%`);

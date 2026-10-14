@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   BEGINNING_OF_TIME,
+  businessFridayHistory,
+  businessFridayOn,
   monthRange,
   resolveSettings,
   validateSettings,
@@ -238,7 +240,11 @@ function EmployeeForm({ business, employee, onClose, onSaved }: { business: Busi
   const [number, setNumber] = useState(employee?.employeeNumber ?? '');
   const [notes, setNotes] = useState(employee?.notes ?? '');
   const [versions, setVersions] = useState<SettingsVersion[]>([]);
-  const [settings, setSettings] = useState<EmployeeSettings>(business.defaults);
+  // A new employee inherits the business Friday-overtime setting (all other defaults are copied as before).
+  const [settings, setSettings] = useState<EmployeeSettings>(() => {
+    const { fridayOvertimeHistory: _h, ...copy } = business.defaults;
+    return { ...copy, fridayOvertime: 'inherit' };
+  });
   const [dirtySettings, setDirtySettings] = useState(false);
   const firstOfMonth = `${ym.year}-${String(ym.month).padStart(2, '0')}-01`;
   const [effectiveFrom, setEffectiveFrom] = useState(firstOfMonth);
@@ -395,6 +401,7 @@ function EmployeeForm({ business, employee, onClose, onSaved }: { business: Busi
             </div>
           )}
           <SettingsEditor
+            businessFriday={businessFridayOn(businessFridayHistory(business.defaults), '9999-12-31')}
             value={settings}
             onChange={(s) => {
               setSettings(s);

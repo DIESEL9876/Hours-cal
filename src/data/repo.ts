@@ -9,11 +9,12 @@ import type {
   DayStatus,
   DayStatusKind,
   EmployeeSettings,
+  FridayPolicyChange,
   LocalDate,
   SettingsVersion,
   ShiftInput,
 } from '../engine/types';
-import { BEGINNING_OF_TIME, defaultEmployeeSettings, validateSettings } from '../engine/settings';
+import { BEGINNING_OF_TIME, businessFridayHistory, businessFridayOn, defaultEmployeeSettings, validateSettings } from '../engine/settings';
 
 export interface Business {
   id: string;
@@ -96,6 +97,28 @@ function audit(
 }
 
 type Row = Record<string, SqlValue>;
+
+/**
+ * Business defaults: keep the Friday-policy history in step with the chosen value. Unchanged value →
+ * unchanged history (and no new field for businesses that never touched the setting).
+ */
+function withFridayHistory(defaults: EmployeeSettings, history: FridayPolicyChange[], effectiveFrom: LocalDate): EmployeeSettings {
+  const { fridayOvertimeHistory: _ignored, ...rest } = defaults;
+  const chosen = defaults.fridayOvertime === 'all_overtime' ? 'all_overtime' : 'none';
+  let next = history;
+  if (businessFridayOn(history, '9999-12-31') !== chosen) next = [...history.filter((h) => h.from < effectiveFrom), { from: effectiveFrom, value: chosen }];
+  const out: EmployeeSettings = { ...rest };
+  if (defaults.fridayOvertime === 'inherit') delete out.fridayOvertime;
+  if (next.length) out.fridayOvertimeHistory = next;
+  return out;
+}
+
+/** Employee settings never carry the business history. */
+function employeeSettingsOnly(s: EmployeeSettings): EmployeeSettings {
+  if (s.fridayOvertimeHistory === undefined) return s;
+  const { fridayOvertimeHistory: _ignored, ...rest } = s;
+  return rest;
+}
 
 function toBusiness(r: Row): Business {
   return {
@@ -191,7 +214,8 @@ export class Repository {
     const dup = await this.driver.select(`SELECT id FROM businesses WHERE name = ? AND archived_at IS NULL`, [name]);
     if (dup.length) throw new RepoError('כבר קיים עסק בשם זה');
     const t = now();
-    const biz: Business = { id: uuid(), name, identifier: input.identifier?.trim() || null, defaults: input.defaults, createdAt: t, updatedAt: t, archivedAt: null };
+    const defaults = withFridayHistory(input.defaults, [], BEGINNING_OF_TIME);
+    const biz: Business = { id: uuid(), name, identifier: input.identifier?.trim() || null, defaults, createdAt: t, updatedAt: t, archivedAt: null };
     await this.driver.batch([
       {
         sql: `INSERT INTO businesses (id, name, identifier, defaults_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)`,
@@ -208,7 +232,7 @@ export class Repository {
       ...before,
       name: patch.name !== undefined ? patch.name.trim() : before.name,
       identifier: patch.identifier !== undefined ? patch.identifier?.trim() || null : before.identifier,
-      defaults: patch.defaults ?? before.defaults,
+      defaults: patch.defaults ? withFridayHistory(patch.defaults, businessFridayHistory(before.defaults), await this.fridayChangeEffectiveFrom(id)) : before.defaults,
       updatedAt: now(),
     };
     if (!after.name) throw new RepoError('יש להזין שם עסק');
@@ -225,6 +249,18 @@ export class Repository {
   }
 
   /** Soft delete. The caller must pass the exact business name as confirmation. */
+  /**
+   * A change of the business Friday policy takes effect after the last FINALISED month of the business,
+   * so finalised months are never recalculated by it (open months follow the new setting).
+   */
+  private async fridayChangeEffectiveFrom(businessId: string): Promise<LocalDate> {
+    const rows = await this.driver.select<{ ym: string | null }>(`SELECT MAX(year_month) AS ym FROM month_reviews WHERE business_id = ? AND status = 'final'`, [businessId]);
+    const ym = rows[0]?.ym;
+    if (!ym) return BEGINNING_OF_TIME;
+    const [y, m] = ym.split('-').map(Number);
+    return m === 12 ? `${y + 1}-01-01` : `${y}-${String(m + 1).padStart(2, '0')}-01`;
+  }
+
   async archiveBusiness(id: string, confirmName: string): Promise<void> {
     const biz = await this.getBusiness(id);
     if (confirmName.trim() !== biz.name) throw new RepoError('שם העסק שהוקלד אינו תואם – הפעולה בוטלה');
@@ -270,6 +306,7 @@ export class Repository {
     if (errs.length) throw new RepoError(errs.join('\n'));
     const num = input.employeeNumber?.trim() || null;
     if (num) await this.assertUniqueNumber(businessId, num, null);
+    input = { ...input, settings: employeeSettingsOnly(input.settings) };
     const t = now();
     const emp: Employee = { id: uuid(), businessId, fullName, employeeNumber: num, notes: input.notes?.trim() || null, createdAt: t, updatedAt: t, archivedAt: null };
     const versionId = uuid();
@@ -359,6 +396,7 @@ export class Repository {
     opts: { authorizeRetroactive?: boolean } = {},
   ): Promise<void> {
     await this.getEmployee(businessId, employeeId);
+    settings = employeeSettingsOnly(settings);
     const errs = validateSettings(settings);
     if (errs.length) throw new RepoError(errs.join('\n'));
     const versions = await this.getSettingsVersions(employeeId);

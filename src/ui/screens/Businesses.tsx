@@ -214,7 +214,7 @@ function BusinessForm({ business, onClose, onSaved }: { business: Business | nul
         ההגדרות שלהלן הן <b>ברירת המחדל לעובדים חדשים</b> בעסק. הן מועתקות לכל עובד בעת הקמתו, ושינוי שלהן לא משנה חישובים של עובדים קיימים.
       </div>
       <div className="mt-5">
-        <SettingsEditor value={defaults} onChange={setDefaults} />
+        <SettingsEditor value={defaults} onChange={setDefaults} scope="business" />
       </div>
       {errors.length > 0 && <div className="mt-4 rounded-lg bg-red-50 p-3 text-[13px] text-red-700">{errors.join(' · ')}</div>}
     </Modal>

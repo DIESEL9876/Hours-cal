@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  businessFridayHistory,
   calculateEmployeePeriod,
   dedupeWarnings,
   eachDate,
@@ -105,8 +106,9 @@ export function AttendanceScreen({ businessId, employeeId }: { businessId: strin
       customHolidays: holidays,
       from,
       to,
+      businessFriday: business ? businessFridayHistory(business.defaults) : undefined,
     });
-  }, [loaded, versions, shifts, entries, holidays, employeeId, from, to]);
+  }, [loaded, versions, shifts, entries, holidays, employeeId, from, to, business]);
 
   // ------------------------------------------------------------- persistence
   const applyShift = useCallback(
