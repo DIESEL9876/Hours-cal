@@ -1,6 +1,6 @@
 [package]
 name = "hours-cal"
-version = "1.1.4"
+version = "1.1.5"
 description = "מערכת לניהול נוכחות וחישוב שעות עבודה ושעות נוספות"
 edition = "2021"
 
@@ -18,6 +18,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 rusqlite = { version = "0.32", features = ["bundled", "backup"] }
 hourscal-license = { path = "../crates/hourscal-license" }
+calamine = { version = "0.36", default-features = false }
 
 [profile.release]
 codegen-units = 1

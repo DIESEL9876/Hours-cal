@@ -24,6 +24,7 @@ export const IconAlert = (p: P) => base(p, <><path d="M12 3l9.5 17h-19L12 3z" />
 export const IconCheck = (p: P) => base(p, <path d="M5 12.5l4.5 4.5L19 7.5" />);
 export const IconX = (p: P) => base(p, <path d="M6 6l12 12M18 6L6 18" />);
 export const IconTrash = (p: P) => base(p, <><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3" /></>);
+export const IconUpload = (p: P) => base(p, <><path d="M12 16V5M7 10l5-5 5 5" /><path d="M5 20h14" /></>);
 export const IconDownload = (p: P) => base(p, <><path d="M12 4v11M7 10l5 5 5-5" /><path d="M5 20h14" /></>);
 export const IconPrinter = (p: P) => base(p, <><path d="M7 9V3h10v6" /><rect x="3" y="9" width="18" height="8" rx="2" /><path d="M7 14h10v7H7z" /></>);
 export const IconUndo = (p: P) => base(p, <><path d="M9 14L4 9l5-5" /><path d="M4 9h11a5 5 0 0 1 0 10h-3" /></>);

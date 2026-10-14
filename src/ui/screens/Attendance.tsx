@@ -22,16 +22,20 @@ import {
 import { toDayStatuses, type Business, type DayEntry, type Employee, type ShiftRecord } from '../../data/repo';
 import { Crumbs, useApp } from '../App';
 import { Badge, Button, Checkbox, DECIMAL_HOURS_LABEL, DECIMAL_HOURS_TITLE, DecimalHours, Drawer, Field, IconButton, PageHeader, Select, severityLabel, severityTone, useUi } from '../components';
-import { IconAlert, IconCheck, IconDownload, IconInfo, IconPlus, IconPrinter, IconRedo, IconTrash, IconUndo } from '../icons';
+import { IconAlert, IconCheck, IconDownload, IconInfo, IconPlus, IconPrinter, IconRedo, IconTrash, IconUndo, IconUpload } from '../icons';
 import { MonthPicker } from '../MonthPicker';
 import { formatDateHe, hm, monthTitle, shekels, STATUS_LABELS, STATUS_OPTIONS } from '../format';
 import { buildTimestamps, normalizeTimeInput, parseBreakInput } from '../timeEntry';
 import { exportEmployeeMonth } from '../../export/exporters';
 import { COPYRIGHT } from '../../licensing/CopyrightFooter';
+import { AttendanceImportDialog } from './AttendanceImport';
+import { ACCEPT as IMPORT_ACCEPT } from '../../import';
 
 type Op =
   | { kind: 'shift'; before: ShiftInput | null; after: ShiftInput | null }
-  | { kind: 'day'; date: LocalDate; before: DayEntry | null; after: DayEntry | null };
+  | { kind: 'day'; date: LocalDate; before: DayEntry | null; after: DayEntry | null }
+  /** A whole approved report import (undone/redone as one step, atomically). */
+  | { kind: 'import'; added: ShiftInput[]; removed: ShiftInput[] };
 
 const stripShift = (s: ShiftInput | ShiftRecord): ShiftInput => ({
   id: s.id,
@@ -60,6 +64,8 @@ export function AttendanceScreen({ businessId, employeeId }: { businessId: strin
   const [detailsDate, setDetailsDate] = useState<LocalDate | null>(null);
   const [undo, setUndo] = useState<Op[]>([]);
   const [redo, setRedo] = useState<Op[]>([]);
+  const [importFile, setImportFile] = useState<File | null>(null);
+  const fileInput = useRef<HTMLInputElement>(null);
   const { from, to } = monthRange(ym.year, ym.month);
   const range = useMemo(() => requiredDataRange(from, to), [from, to]);
 
@@ -128,6 +134,16 @@ export function AttendanceScreen({ businessId, employeeId }: { businessId: strin
     [repo, businessId, employeeId],
   );
 
+  /** Re-applies / reverts a whole import atomically (used by undo/redo). */
+  const applyImport = useCallback(
+    async (add: ShiftInput[], remove: ShiftInput[], isUndo: boolean) => {
+      await repo.applyAttendanceImport(businessId, employeeId, { add, remove }, { undo: isUndo, redo: !isUndo });
+      const removeIds = new Set(remove.map((x) => x.id));
+      setShifts((list) => [...list.filter((x) => !removeIds.has(x.id)), ...add]);
+    },
+    [repo, businessId, employeeId],
+  );
+
   const record = (op: Op) => {
     setUndo((u) => [...u.slice(-199), op]);
     setRedo([]);
@@ -165,6 +181,7 @@ export function AttendanceScreen({ businessId, employeeId }: { businessId: strin
     if (!op) return;
     try {
       if (op.kind === 'shift') await applyShift(op.after, op.before);
+      else if (op.kind === 'import') await applyImport(op.removed, op.added, true);
       else await applyDay(op.date, op.before);
       setUndo((u) => u.slice(0, -1));
       setRedo((r) => [...r, op]);
@@ -179,6 +196,7 @@ export function AttendanceScreen({ businessId, employeeId }: { businessId: strin
     if (!op) return;
     try {
       if (op.kind === 'shift') await applyShift(op.before, op.after);
+      else if (op.kind === 'import') await applyImport(op.added, op.removed, false);
       else await applyDay(op.date, op.after);
       setRedo((r) => r.slice(0, -1));
       setUndo((u) => [...u, op]);
@@ -248,6 +266,21 @@ export function AttendanceScreen({ businessId, employeeId }: { businessId: strin
         actions={
           <>
             <MonthPicker value={ym} onChange={setYm} />
+            <Button variant="primary" icon={<IconUpload size={16} />} onClick={() => fileInput.current?.click()} data-testid="import-button">
+              ייבוא דוח שעות
+            </Button>
+            <input
+              ref={fileInput}
+              type="file"
+              accept={IMPORT_ACCEPT}
+              className="hidden"
+              data-testid="import-file-input"
+              onChange={(e) => {
+                const f = e.target.files?.[0] ?? null;
+                e.target.value = '';
+                if (f) setImportFile(f);
+              }}
+            />
             <IconButton label="ביטול פעולה (Ctrl+Z)" onClick={doUndo} disabled={!undo.length}>
               <IconUndo />
             </IconButton>
@@ -381,6 +414,24 @@ export function AttendanceScreen({ businessId, employeeId }: { businessId: strin
           onClose={() => setDetailsDate(null)}
           onSaveShift={saveShift}
           onSaveDay={saveDay}
+        />
+      )}
+      {importFile && (
+        <AttendanceImportDialog
+          businessId={businessId}
+          employee={employee}
+          year={ym.year}
+          month={ym.month}
+          file={importFile}
+          onClose={() => setImportFile(null)}
+          onImported={(r) => {
+            setShifts((list) => {
+              const removed = new Set(r.removed.map((x) => x.id));
+              return [...list.filter((x) => !removed.has(x.id)), ...r.added];
+            });
+            record({ kind: 'import', added: r.added, removed: r.removed });
+            if (r.year !== ym.year || r.month !== ym.month) setYm({ year: r.year, month: r.month });
+          }}
         />
       )}
     </div>

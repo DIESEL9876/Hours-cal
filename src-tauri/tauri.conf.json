@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Hours-Cal",
-  "version": "1.1.4",
+  "version": "1.1.5",
   "identifier": "il.office.hourscal",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -22,7 +22,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; script-src 'self' 'wasm-unsafe-eval'; connect-src ipc: http://ipc.localhost"
+      "csp": "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; script-src 'self' 'wasm-unsafe-eval'; connect-src 'self' ipc: http://ipc.localhost; worker-src 'self'"
     }
   },
   "bundle": {

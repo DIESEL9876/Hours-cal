@@ -487,6 +487,7 @@ const ENTITY_LABELS: Record<string, string> = {
   day_entry: 'סטטוס / הערה',
   custom_holiday: 'חג מותאם',
   month_review: 'סטטוס חודש',
+  attendance_import: 'ייבוא דוח שעות',
 };
 const ACTION_LABELS: Record<string, string> = {
   create: 'יצירה',
@@ -499,6 +500,8 @@ const ACTION_LABELS: Record<string, string> = {
   open: 'פתיחה מחדש',
   in_review: 'בבדיקה',
   final: 'סגירה סופית',
+  import: 'ייבוא',
+  import_undo: 'ביטול ייבוא',
 };
 
 function describe(e: AuditEntry): string {
@@ -512,6 +515,10 @@ function describe(e: AuditEntry): string {
   }
   if (e.entity === 'day_entry') return e.entityId ? formatDateHe(e.entityId) : '';
   if (e.entity === 'month_review') return e.entityId ?? '';
+  if (e.entity === 'attendance_import' && a) {
+    const m = a as { fileName?: string; month?: string; shiftsAdded?: number; shiftsRemoved?: number };
+    return `${m.fileName ?? ''} · ${m.month ?? ''} · נוספו ${m.shiftsAdded ?? 0}, הוחלפו ${m.shiftsRemoved ?? 0}`;
+  }
   return '';
 }
 

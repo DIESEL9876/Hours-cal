@@ -463,6 +463,50 @@ export class Repository {
     ]);
   }
 
+  /**
+   * Attendance-report import (and its undo): removes the shifts the user explicitly chose to replace and
+   * inserts the approved imported shifts — ALL in one transaction, with an audit row per shift plus one
+   * summary row describing the import (file name, hash, counts). Nothing is written if any shift is invalid.
+   */
+  async applyAttendanceImport(
+    businessId: string,
+    employeeId: string,
+    changes: { add: ShiftInput[]; remove: ShiftInput[] },
+    meta: Record<string, unknown> & { undo?: boolean },
+  ): Promise<void> {
+    await this.getEmployee(businessId, employeeId);
+    const t = now();
+    const stmts: Statement[] = [];
+    for (const r of changes.remove) {
+      const before = await this.getShift(businessId, r.id);
+      if (!before || before.employeeId !== employeeId) throw new RepoError('משמרת להחלפה לא נמצאה');
+      stmts.push({ sql: `DELETE FROM shifts WHERE id = ? AND business_id = ?`, params: [r.id, businessId] });
+      stmts.push(audit('shift', 'delete', { businessId, employeeId, entityId: r.id }, shiftForAudit(before), null));
+    }
+    const removing = new Set(changes.remove.map((r) => r.id));
+    for (const s of changes.add) {
+      if (!s.startAt && !s.endAt) throw new RepoError('משמרת ריקה אינה נשמרת');
+      if (s.startAt && s.endAt && s.endAt <= s.startAt) throw new RepoError(`${s.workDate}: שעת היציאה חייבת להיות מאוחרת משעת הכניסה`);
+      if (s.startAt && s.startAt.slice(0, 10) !== s.workDate) throw new RepoError(`${s.workDate}: תאריך המשמרת אינו תואם`);
+      if (s.breakMinutes !== null && (!Number.isInteger(s.breakMinutes) || s.breakMinutes < 0)) throw new RepoError('משך הפסקה לא תקין');
+      if (!removing.has(s.id) && (await this.getShift(businessId, s.id))) throw new RepoError('מזהה משמרת כפול');
+      stmts.push({
+        sql: `INSERT INTO shifts (work_date, start_at, end_at, break_minutes, break_start, break_confirmed, break_paid, reviewed, note, created_at, updated_at, id, business_id, employee_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        params: [s.workDate, s.startAt, s.endAt, s.breakMinutes, s.breakStart, b(s.breakConfirmed), b(s.breakPaid), b(s.reviewed), s.note ?? null, t, t, s.id, businessId, employeeId],
+      });
+      stmts.push(audit('shift', 'create', { businessId, employeeId, entityId: s.id }, null, shiftForAudit(s)));
+    }
+    stmts.push({ sql: `UPDATE employees SET updated_at = ? WHERE id = ?`, params: [t, employeeId] });
+    stmts.push(
+      audit('attendance_import', meta.undo ? 'import_undo' : 'import', { businessId, employeeId, entityId: null }, null, {
+        ...meta,
+        shiftsAdded: changes.add.length,
+        shiftsRemoved: changes.remove.length,
+      }),
+    );
+    await this.driver.batch(stmts);
+  }
+
   // ---------------------------------------------------------------- day entries (status + note)
   async getDayEntries(businessId: string, employeeId: string, from: LocalDate, to: LocalDate): Promise<DayEntry[]> {
     const rows = await this.driver.select(

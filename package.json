@@ -1,7 +1,7 @@
 {
   "name": "hours-cal",
   "private": true,
-  "version": "1.1.4",
+  "version": "1.1.5",
   "description": "מערכת לניהול נוכחות וחישוב שעות עבודה ושעות נוספות",
   "type": "module",
   "scripts": {
@@ -23,10 +23,14 @@
     "@hebcal/core": "^6.14.1",
     "@tauri-apps/api": "^2.12.1",
     "@tauri-apps/plugin-dialog": "^2.8.1",
+    "@tesseract.js-data/eng": "^1.0.0",
+    "@tesseract.js-data/heb": "^1.0.0",
     "exceljs": "^4.4.0",
+    "pdfjs-dist": "^6.4.299",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
-    "sql.js": "^1.14.2"
+    "sql.js": "^1.14.2",
+    "tesseract.js": "^7.0.0"
   },
   "devDependencies": {
     "@playwright/test": "1.56",

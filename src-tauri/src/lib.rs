@@ -1,4 +1,5 @@
 mod db;
+mod import_xls;
 mod licensing;
 
 use db::{BackupInfo, Db, Stmt};
@@ -56,6 +57,17 @@ fn write_export_file(path: String, contents: Vec<u8>) -> Result<(), String> {
     std::fs::write(&path, contents).map_err(|e| e.to_string())
 }
 
+/// Attendance import: reads a legacy .xls report sent as raw bytes (values only, nothing executed,
+/// nothing written to disk).
+#[tauri::command]
+fn import_read_xls(request: tauri::ipc::Request<'_>) -> Result<Vec<import_xls::XlsSheet>, String> {
+    licensing::require_ready()?;
+    match request.body() {
+        tauri::ipc::InvokeBody::Raw(bytes) => import_xls::read_xls(bytes),
+        _ => Err("פורמט בקשה לא צפוי".into()),
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -70,6 +82,7 @@ pub fn run() {
             backup_restore,
             db_location,
             write_export_file,
+            import_read_xls,
             licensing::licensing_startup_route,
             licensing::legal_document,
             licensing::legal_accept,
