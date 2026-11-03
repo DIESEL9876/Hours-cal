@@ -126,8 +126,20 @@ export interface SourceRecord {
   conf?: number;
 }
 
+/** A day category written in the source report (e.g. "חופשה"). A PROPOSAL only — applied only if the user opts in. */
+export interface CategoryHint {
+  date: LocalDate;
+  kind: 'vacation' | 'sick' | 'holiday' | 'election' | 'unpaid';
+  /** The source text that produced the proposal. */
+  text: string;
+  employee: string | null;
+  employeeNo: string | null;
+}
+
 export interface ReadResult {
   records: SourceRecord[];
+  /** Day categories recognised in the report (proposals for the user to accept). */
+  categoryHints: CategoryHint[];
   /** Rows recognised as totals / summaries and skipped. */
   summaryRows: number;
   /** Dated rows with no attendance data at all (weekends, holidays, absences). */

@@ -2,6 +2,8 @@
  * Glue between stored (entered) data and the pure calculation engine.
  */
 import {
+  absenceHistoryFrom,
+  businessAbsenceDefaults,
   businessFridayHistory,
   calculateBusinessMonthlySummary,
   calculateEmployeePeriod,
@@ -22,14 +24,28 @@ export async function loadEmployeeInput(
   to: LocalDate,
 ): Promise<EmployeePeriodInput> {
   const range = requiredDataRange(from, to);
+  // Sickness periods and 3-month averages (paid absences) look further back.
+  const history = absenceHistoryFrom(from);
+  const start = history < range.from ? history : range.from;
   const [settingsVersions, shifts, entries, customHolidays, business] = await Promise.all([
     repo.getSettingsVersions(employeeId),
-    repo.getShifts(businessId, employeeId, range.from, range.to),
-    repo.getDayEntries(businessId, employeeId, range.from, range.to),
+    repo.getShifts(businessId, employeeId, start, range.to),
+    repo.getDayEntries(businessId, employeeId, start, range.to),
     repo.listCustomHolidays(businessId),
     repo.getBusiness(businessId),
   ]);
-  return { employeeId, settingsVersions, shifts, dayStatuses: toDayStatuses(entries), customHolidays, from, to, businessFriday: businessFridayHistory(business.defaults) };
+  return {
+    employeeId,
+    settingsVersions,
+    shifts,
+    dayStatuses: toDayStatuses(entries),
+    customHolidays,
+    from,
+    to,
+    businessFriday: businessFridayHistory(business.defaults),
+    businessAbsence: businessAbsenceDefaults(business.defaults),
+    historyFrom: start,
+  };
 }
 
 export async function computeEmployeeMonth(

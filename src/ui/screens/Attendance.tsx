@@ -1,15 +1,21 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  absenceHistoryFrom,
+  businessAbsenceDefaults,
   businessFridayHistory,
   calculateEmployeePeriod,
+  ABSENCE_LABELS,
   dedupeWarnings,
   eachDate,
+  formatDays,
   formatDurationHe,
   HEBREW_WEEKDAYS,
   monthRange,
   premiumMinutes,
   requiredDataRange,
   resolveSettings,
+  type AbsenceDetails,
+  type AttendanceTotals,
   type DayResult,
   type DayStatusKind,
   type EmployeePeriodResult,
@@ -36,7 +42,7 @@ type Op =
   | { kind: 'shift'; before: ShiftInput | null; after: ShiftInput | null }
   | { kind: 'day'; date: LocalDate; before: DayEntry | null; after: DayEntry | null }
   /** A whole approved report import (undone/redone as one step, atomically). */
-  | { kind: 'import'; added: ShiftInput[]; removed: ShiftInput[] };
+  | { kind: 'import'; added: ShiftInput[]; removed: ShiftInput[]; days: { date: LocalDate; before: DayEntry | null; after: DayEntry | null }[] };
 
 const stripShift = (s: ShiftInput | ShiftRecord): ShiftInput => ({
   id: s.id,
@@ -68,7 +74,12 @@ export function AttendanceScreen({ businessId, employeeId }: { businessId: strin
   const [importFile, setImportFile] = useState<File | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const { from, to } = monthRange(ym.year, ym.month);
-  const range = useMemo(() => requiredDataRange(from, to), [from, to]);
+  // Weekly range + look-back for sickness periods and 3-month averages (same as the service layer).
+  const range = useMemo(() => {
+    const r = requiredDataRange(from, to);
+    const h = absenceHistoryFrom(from);
+    return { from: h < r.from ? h : r.from, to: r.to };
+  }, [from, to]);
 
   const load = useCallback(async () => {
     const [b, e, vs, sh, en, hol] = await Promise.all([
@@ -107,8 +118,10 @@ export function AttendanceScreen({ businessId, employeeId }: { businessId: strin
       from,
       to,
       businessFriday: business ? businessFridayHistory(business.defaults) : undefined,
+      businessAbsence: business ? businessAbsenceDefaults(business.defaults) : undefined,
+      historyFrom: range.from,
     });
-  }, [loaded, versions, shifts, entries, holidays, employeeId, from, to, business]);
+  }, [loaded, versions, shifts, entries, holidays, employeeId, from, to, business, range]);
 
   // ------------------------------------------------------------- persistence
   const applyShift = useCallback(
@@ -126,11 +139,12 @@ export function AttendanceScreen({ businessId, employeeId }: { businessId: strin
 
   const applyDay = useCallback(
     async (date: LocalDate, entry: DayEntry | null) => {
-      const e = entry ?? { date, status: null, note: null };
+      // Absence details are always written explicitly (undo/redo restores exactly the earlier state).
+      const e: DayEntry = entry ? { ...entry, absence: entry.absence ?? null } : { date, status: null, note: null, absence: null };
       await repo.setDayEntry(businessId, employeeId, e);
       setEntries((list) => {
         const rest = list.filter((x) => x.date !== date);
-        return !e.status && !e.note ? rest : [...rest, e];
+        return !e.status && !e.note && !hasAbsence(e.absence) ? rest : [...rest, e];
       });
     },
     [repo, businessId, employeeId],
@@ -138,10 +152,15 @@ export function AttendanceScreen({ businessId, employeeId }: { businessId: strin
 
   /** Re-applies / reverts a whole import atomically (used by undo/redo). */
   const applyImport = useCallback(
-    async (add: ShiftInput[], remove: ShiftInput[], isUndo: boolean) => {
-      await repo.applyAttendanceImport(businessId, employeeId, { add, remove }, { undo: isUndo, redo: !isUndo });
+    async (add: ShiftInput[], remove: ShiftInput[], days: { date: LocalDate; before: DayEntry | null; after: DayEntry | null }[], isUndo: boolean) => {
+      const dayTypes = days.map((d) => (isUndo ? { before: d.after, after: d.before ?? { date: d.date, status: null, note: null, absence: null } } : d));
+      await repo.applyAttendanceImport(businessId, employeeId, { add, remove, dayTypes }, { undo: isUndo, redo: !isUndo });
       const removeIds = new Set(remove.map((x) => x.id));
       setShifts((list) => [...list.filter((x) => !removeIds.has(x.id)), ...add]);
+      if (days.length) {
+        const byDate = new Map(days.map((d) => [d.date, isUndo ? d.before : d.after]));
+        setEntries((list) => [...list.filter((e) => !byDate.has(e.date)), ...[...byDate.values()].filter((e): e is DayEntry => !!e)]);
+      }
     },
     [repo, businessId, employeeId],
   );
@@ -183,7 +202,7 @@ export function AttendanceScreen({ businessId, employeeId }: { businessId: strin
     if (!op) return;
     try {
       if (op.kind === 'shift') await applyShift(op.after, op.before);
-      else if (op.kind === 'import') await applyImport(op.removed, op.added, true);
+      else if (op.kind === 'import') await applyImport(op.removed, op.added, op.days, true);
       else await applyDay(op.date, op.before);
       setUndo((u) => u.slice(0, -1));
       setRedo((r) => [...r, op]);
@@ -198,7 +217,7 @@ export function AttendanceScreen({ businessId, employeeId }: { businessId: strin
     if (!op) return;
     try {
       if (op.kind === 'shift') await applyShift(op.before, op.after);
-      else if (op.kind === 'import') await applyImport(op.added, op.removed, false);
+      else if (op.kind === 'import') await applyImport(op.added, op.removed, op.days, false);
       else await applyDay(op.date, op.after);
       setRedo((r) => r.slice(0, -1));
       setUndo((u) => [...u, op]);
@@ -222,6 +241,27 @@ export function AttendanceScreen({ businessId, employeeId }: { businessId: strin
     window.addEventListener('keydown', h);
     return () => window.removeEventListener('keydown', h);
   }, [doUndo, doRedo]);
+
+  /**
+   * Day type ("סוג יום") — set only by an explicit user choice. Replacing an existing category asks for confirmation;
+   * category-specific details of the earlier category are not carried over. Shifts are never touched.
+   */
+  const changeDayType = useCallback(
+    async (date: LocalDate, status: DayStatusKind | null, absence: AbsenceDetails | null = null) => {
+      const before = entries.find((e) => e.date === date) ?? null;
+      if ((before?.status ?? null) === status && !absence) return;
+      if (before?.status && status !== before.status) {
+        const ok = await ui.confirm({
+          title: 'שינוי סוג יום',
+          message: `לשנות את סוג היום ${formatDateHe(date)} מ"${STATUS_LABELS[before.status]}" ל"${status ? STATUS_LABELS[status] : 'ללא סוג יום'}"? פרטי ההיעדרות הקודמים יוסרו. רישומי הכניסה והיציאה אינם משתנים.`,
+          confirmLabel: 'שינוי',
+        });
+        if (!ok) return;
+      }
+      await saveDay(date, { date, status, note: before?.note ?? null, absence });
+    },
+    [entries, saveDay, ui],
+  );
 
   // ------------------------------------------------------------- bulk confirm
   const unconfirmed = useMemo(() => result?.days.flatMap((d) => d.shifts.filter((s) => s.valid && s.break.unconfirmed)) ?? [], [result]);
@@ -250,9 +290,11 @@ export function AttendanceScreen({ businessId, employeeId }: { businessId: strin
   const firstIssueDate = (pred: (w: Warning) => boolean) => allWarnings.find(pred)?.date ?? null;
   const weeksByEnd = new Map(result.weeks.map((w) => [w.weekEnd, w]));
   const hasPay = t.payAgorot !== null;
+  const att = result.attendance;
+  const firstReviewDate = result.days.find((d) => d.attendance.basis === 'review')?.date ?? null;
 
   return (
-    <div className="pb-28">
+    <div className="pb-44">
       <PageHeader
         breadcrumbs={
           <Crumbs
@@ -321,6 +363,7 @@ export function AttendanceScreen({ businessId, employeeId }: { businessId: strin
             <tr className="bg-slate-50 text-right text-[12px] font-medium text-ink-soft [&>th]:border-b [&>th]:border-line [&>th]:px-2 [&>th]:py-2.5 [&>th]:font-medium">
               <th className="w-[92px] ps-4">תאריך</th>
               <th className="w-[84px]">יום</th>
+              <th className="w-[108px]" title="נקבע ידנית בלבד. הצעות מוצגות לאישור או לדחייה.">סוג יום</th>
               <th className="w-[90px] text-center">כניסה</th>
               <th className="w-[90px] text-center">יציאה</th>
               <th className="text-center">שעות ברוטו</th>
@@ -354,6 +397,8 @@ export function AttendanceScreen({ businessId, employeeId }: { businessId: strin
                     shift={sh}
                     shiftResult={sh ? (day.shifts.find((r) => r.shiftId === sh.id) ?? null) : null}
                     entry={entry}
+                    onDayType={(status, absence) => changeDayType(day.date, status, absence)}
+                    onRejectSuggestion={(kind) => saveDay(day.date, { date: day.date, status: null, note: entry?.note ?? null, absence: { ...(entry?.absence ?? {}), rejectedSuggestion: kind } })}
                     onSave={async (after) => {
                       const ok = await saveShift(sh, after);
                       if (ok && !sh && after && i >= dayShifts.length) setExtraRows((x) => ({ ...x, [day.date]: Math.max(0, (x[day.date] ?? 0) - 1) }));
@@ -387,12 +432,14 @@ export function AttendanceScreen({ businessId, employeeId }: { businessId: strin
           { label: 'שעות עבודה נטו בסה״כ', value: hm(t.netMinutes, '0:00'), decimalMinutes: t.netMinutes, strong: true, testid: 'total-net' },
           ...(hasPay ? [{ label: 'הערכת עלות (לא תלוש)', value: shekels(t.payAgorot) }] : []),
         ]}
+        attendance={att}
         flags={[
           { label: 'הפסקות לא מאושרות', count: t.unconfirmedBreaks, tone: 'amber' as const, onClick: () => setDetailsDate(firstIssueDate((w) => w.code === 'BREAK_UNCONFIRMED')) },
           { label: 'רישומים חסרים', count: t.incompleteEntries, tone: 'red' as const, onClick: () => setDetailsDate(firstIssueDate((w) => w.code === 'INCOMPLETE' || w.code === 'MISSING_RECORD')) },
           { label: 'שגיאות', count: t.errorCount - t.incompleteEntries, tone: 'red' as const, onClick: () => setDetailsDate(firstIssueDate((w) => w.severity === 'error')) },
           { label: 'לבדיקה', count: t.reviewCount - t.unconfirmedBreaks, tone: 'amber' as const, onClick: () => setDetailsDate(firstIssueDate((w) => w.severity === 'review' && w.code !== 'BREAK_UNCONFIRMED')) },
           { label: 'אזהרות ציות', count: t.complianceCount, tone: 'violet' as const, onClick: () => setDetailsDate(firstIssueDate((w) => w.severity === 'compliance')) },
+          { label: 'ימי היעדרות לבדיקה', count: att.reviewDays, tone: 'amber' as const, onClick: () => setDetailsDate(firstReviewDate) },
         ]}
       />
 
@@ -416,6 +463,7 @@ export function AttendanceScreen({ businessId, employeeId }: { businessId: strin
           onClose={() => setDetailsDate(null)}
           onSaveShift={saveShift}
           onSaveDay={saveDay}
+          onDayType={(status) => changeDayType(detailsDate, status)}
         />
       )}
       {importFile && (
@@ -431,7 +479,11 @@ export function AttendanceScreen({ businessId, employeeId }: { businessId: strin
               const removed = new Set(r.removed.map((x) => x.id));
               return [...list.filter((x) => !removed.has(x.id)), ...r.added];
             });
-            record({ kind: 'import', added: r.added, removed: r.removed });
+            if (r.dayTypes.length) {
+              const byDate = new Map(r.dayTypes.map((d) => [d.date, d.after]));
+              setEntries((list) => [...list.filter((e) => !byDate.has(e.date)), ...[...byDate.values()].filter((e): e is DayEntry => !!e)]);
+            }
+            record({ kind: 'import', added: r.added, removed: r.removed, days: r.dayTypes });
             if (r.year !== ym.year || r.month !== ym.month) setYm({ year: r.year, month: r.month });
           }}
         />
@@ -496,6 +548,8 @@ function ShiftRow({
   shift,
   shiftResult,
   entry,
+  onDayType,
+  onRejectSuggestion,
   onSave,
   onAddShift,
   onDetails,
@@ -506,6 +560,8 @@ function ShiftRow({
   shift: ShiftInput | null;
   shiftResult: ShiftResult | null;
   entry: DayEntry | null;
+  onDayType: (status: DayStatusKind | null, absence?: AbsenceDetails | null) => void;
+  onRejectSuggestion: (kind: DayStatusKind) => void;
   onSave: (after: ShiftInput | null) => Promise<boolean>;
   onAddShift: () => void;
   onDetails: () => void;
@@ -607,6 +663,7 @@ function ShiftRow({
           {labels.length > 0 && <div className="mt-0.5 flex flex-wrap gap-1">{labels}</div>}
         </div>,
       )}
+      {dayCell(<DayTypeCell day={day} entry={entry} onChange={onDayType} onReject={onRejectSuggestion} />, 'text-right')}
       <td className={`${cellBorder} px-1 py-1 text-center`}>
         <input
           className={`cell-input ${bad.start ? 'invalid' : ''}`}
@@ -685,7 +742,12 @@ function ShiftRow({
       )}
       {dayCell(
         <button className="flex w-full flex-wrap items-center gap-1 text-right" onClick={onDetails}>
-          {entry?.status && <Badge tone={entry.status === 'missing_record' ? 'red' : 'slate'}>{STATUS_LABELS[entry.status]}</Badge>}
+          {entry?.status === 'missing_record' && <Badge tone="red">{STATUS_LABELS[entry.status]}</Badge>}
+          {day.attendance.basis === 'review' && (
+            <Badge tone="amber" title={day.attendance.reviewReasons.join('\n')}>
+              זכאות לבדיקה
+            </Badge>
+          )}
           {errorCount > 0 && (
             <Badge tone="red" title={warnings.filter((w) => w.severity === 'error').map((w) => w.message).join('\n')}>
               <IconAlert size={12} /> {errorCount > 1 ? `${errorCount} שגיאות` : (SHORT_ERROR[warnings.find((w) => w.severity === 'error')!.code] ?? 'שגיאה')}
@@ -720,11 +782,79 @@ function ShiftRow({
   );
 }
 
+const hasAbsence = (a: AbsenceDetails | null | undefined) => !!a && Object.values(a).some((v) => v !== null && v !== undefined && v !== '');
+
+/** Day types in the order of the specification; legacy values are listed only when already stored. */
+const DAY_TYPE_ORDER: DayStatusKind[] = ['work', 'vacation', 'sick', 'holiday', 'election', 'unpaid', 'not_worked'];
+const LEGACY_TYPES: DayStatusKind[] = ['reserve', 'missing_record'];
+
+/** A suggestion is shown for review only; nothing is saved until the user accepts it. */
+function suggestionFor(day: DayResult, entry: DayEntry | null): { kind: DayStatusKind; label: string } | null {
+  if (entry?.status || day.worked || !day.scheduled) return null;
+  if (day.holidayName && entry?.absence?.rejectedSuggestion !== 'holiday') return { kind: 'holiday', label: `חג (${day.holidayName})` };
+  return null;
+}
+
+function DayTypeCell({
+  day,
+  entry,
+  onChange,
+  onReject,
+}: {
+  day: DayResult;
+  entry: DayEntry | null;
+  onChange: (status: DayStatusKind | null, absence?: AbsenceDetails | null) => void;
+  onReject: (kind: DayStatusKind) => void;
+}) {
+  const value = entry?.status ?? '';
+  const options = [...DAY_TYPE_ORDER, ...LEGACY_TYPES.filter((k) => k === value)];
+  const sug = suggestionFor(day, entry);
+  const a = day.attendance;
+  return (
+    <div className="leading-tight">
+      <select
+        className={`no-print w-full rounded-md border border-transparent bg-transparent px-1 py-0.5 text-[12px] hover:border-line focus:border-brand focus:outline-none ${value ? 'font-medium text-ink' : 'text-slate-400'}`}
+        value={value}
+        aria-label={`סוג יום ${day.date}`}
+        data-testid={`day-type-${day.date}`}
+        onChange={(e) => onChange((e.target.value || null) as DayStatusKind | null)}
+      >
+        <option value="">—</option>
+        {options.map((k) => (
+          <option key={k} value={k}>
+            {STATUS_LABELS[k]}
+          </option>
+        ))}
+      </select>
+      {value && <span className="print-only text-[11px]">{STATUS_LABELS[value]}</span>}
+      {a.category && a.paidAbsenceNominalMinutes > 0 && (
+        <div className="num mt-0.5 text-[10.5px] text-ink-soft" title={a.explanation.join('\n')}>
+          {a.absenceDayHundredths < 100 ? `${hm(a.paidAbsenceNominalMinutes)} · ` : ''}
+          {a.payPercent === null ? <span className="text-amber-700">דורש בדיקה</span> : `${a.payPercent}%`}
+        </div>
+      )}
+      {sug && (
+        <div className="no-print mt-1 flex items-center gap-0.5 rounded bg-amber-50 px-1 py-0.5 text-[10.5px] text-amber-900 ring-1 ring-amber-200" data-testid={`suggestion-${day.date}`}>
+          <span className="truncate" title="הצעה בלבד — לא נשמרה. ניתן לאשר, לדחות או להתעלם.">
+            הצעה: {sug.label}
+          </span>
+          <button className="rounded px-0.5 font-semibold text-emerald-700 hover:bg-emerald-100" title="אישור ההצעה" aria-label={`אישור הצעה ${day.date}`} onClick={() => onChange(sug.kind, sug.kind === 'holiday' && day.holidayName ? { holidayName: day.holidayName } : null)}>
+            ✓
+          </button>
+          <button className="rounded px-0.5 text-slate-500 hover:bg-slate-200" title="דחיית ההצעה" aria-label={`דחיית הצעה ${day.date}`} onClick={() => onReject(sug.kind)}>
+            ✕
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function WeekRow({ week }: { week: WeekResult }) {
-  if (week.netMinutes === 0) return null;
+  if (week.netMinutes === 0 && !week.absenceCreditMinutes) return null;
   return (
     <tr className="bg-slate-50/60 text-[12px] text-ink-soft">
-      <td colSpan={13} className="border-b border-line px-4 py-1.5">
+      <td colSpan={14} className="border-b border-line px-4 py-1.5">
         סיכום שבוע {formatDateHe(week.weekStart).slice(0, 5)}–{formatDateHe(week.weekEnd).slice(0, 5)}: נטו <span className="num font-medium text-ink">{hm(week.netMinutes, '0:00')}</span>
         {week.weeklyThresholdMinutes !== null && (
           <>
@@ -747,6 +877,12 @@ function WeekRow({ week }: { week: WeekResult }) {
             · נוספות שבועיות <span className="num font-medium text-ink">{hm(week.weeklyOvertimeMinutes)}</span>
           </>
         )}
+        {(week.absenceCreditMinutes ?? 0) > 0 && (
+          <>
+            {' '}
+            · זיכוי היעדרות בתשלום לתקן השבועי <span className="num font-medium text-ink">{hm(week.absenceCreditMinutes!)}</span>
+          </>
+        )}
       </td>
     </tr>
   );
@@ -755,11 +891,32 @@ function WeekRow({ week }: { week: WeekResult }) {
 function TotalsBar({
   items,
   flags,
+  attendance,
 }: {
   items: { label: string; value: string; strong?: boolean; testid?: string; decimalMinutes?: number; legend?: boolean }[];
   flags: { label: string; count: number; tone: 'amber' | 'red' | 'violet'; onClick: () => void }[];
+  attendance: AttendanceTotals;
 }) {
   const visible = flags.filter((f) => f.count > 0);
+  const a = attendance;
+  const dayItem = (label: string, hundredths: number, testid: string, sub?: string) => (
+    <div key={testid} className="min-w-0">
+      <div className="text-[11px] text-ink-soft">{label}</div>
+      <div className="num text-right text-[14px] font-semibold text-ink" data-testid={testid}>
+        {formatDays(hundredths)}
+      </div>
+      {sub && <div className="num text-[10.5px] leading-tight text-slate-500">{sub}</div>}
+    </div>
+  );
+  const hourItem = (label: string, minutes: number, testid: string) => (
+    <div key={testid} className="min-w-0">
+      <div className="text-[11px] text-ink-soft">{label}</div>
+      <div className="num text-right text-[14px] font-semibold text-ink" data-testid={testid}>
+        {hm(minutes, '0:00')}
+      </div>
+      <DecimalHours minutes={minutes} testid={`${testid}-decimal`} />
+    </div>
+  );
   return (
     <div className="fixed inset-x-0 bottom-0 z-20 border-t border-line bg-white/95 shadow-[0_-4px_16px_rgba(15,27,45,0.06)] backdrop-blur print:static print:mt-4 print:shadow-none">
       <div className="mx-auto flex max-w-[1600px] flex-wrap items-start gap-x-6 gap-y-2 px-6 py-3">
@@ -801,6 +958,21 @@ function TotalsBar({
           )}
         </div>
       </div>
+      <div className="mx-auto flex max-w-[1600px] flex-wrap items-start gap-x-6 gap-y-2 border-t border-line/60 px-6 py-2" data-testid="attendance-totals">
+        <div className="min-w-0 self-center border-e border-line pe-4 text-[11px] font-medium text-ink-soft" title="שעות בפועל = עבודה בפועל בלבד. שעות משולמות = עבודה בפועל + שווה ערך להיעדרות בתשלום (ללא תוספות 125%/150%).">
+          בפועל / בתשלום
+        </div>
+        {dayItem('ימים בפועל', a.actualWorkedDays * 100, 'total-actual-days')}
+        {dayItem('ימים משולמים', a.paidDayHundredths, 'total-paid-days')}
+        {hourItem('שעות בפועל', a.actualWorkedMinutes, 'total-actual-hours')}
+        {hourItem('שעות משולמות', a.payableEquivalentMinutes, 'total-paid-hours')}
+        {dayItem('ימי חופשה', a.vacationDayHundredths, 'total-vacation-days')}
+        {dayItem('ימי מחלה', a.sickDayHundredths, 'total-sick-days', a.sickDayHundredths ? `משולם ${formatDays(a.sickPaidDayHundredths)} · ניכוי ${formatDays(a.sickBalanceDeductionHundredths)}` : undefined)}
+        {dayItem('ימי חג', a.holidayDayHundredths, 'total-holiday-days')}
+        {dayItem('ימי בחירות', a.electionDayHundredths, 'total-election-days')}
+        {a.unpaidDayHundredths > 0 && dayItem('ללא תשלום', a.unpaidDayHundredths, 'total-unpaid-days')}
+        {a.weeklyCreditMinutes > 0 && hourItem('זיכוי לתקן השבועי', a.weeklyCreditMinutes, 'total-weekly-credit')}
+      </div>
     </div>
   );
 }
@@ -818,6 +990,7 @@ function DayDrawer({
   onClose,
   onSaveShift,
   onSaveDay,
+  onDayType,
 }: {
   date: LocalDate;
   day: DayResult;
@@ -827,6 +1000,7 @@ function DayDrawer({
   onClose: () => void;
   onSaveShift: (before: ShiftInput | null, after: ShiftInput | null) => Promise<boolean>;
   onSaveDay: (date: LocalDate, after: DayEntry | null) => Promise<void>;
+  onDayType: (status: DayStatusKind | null) => void;
 }) {
   const ui = useUi();
   const [note, setNote] = useState(entry?.note ?? '');
@@ -848,23 +1022,25 @@ function DayDrawer({
     >
       <div className="space-y-5 text-[14px]">
         <div className="grid grid-cols-2 gap-3">
-          <Field label="סטטוס יום">
-            <Select<DayStatusKind | ''>
-              value={entry?.status ?? ''}
-              onChange={(v) => onSaveDay(date, { date, status: v || null, note: entry?.note ?? null })}
-              options={STATUS_OPTIONS}
-            />
+          <Field label="סוג יום">
+            <Select<DayStatusKind | ''> value={entry?.status ?? ''} onChange={(v) => onDayType(v || null)} options={STATUS_OPTIONS} />
           </Field>
           <Field label="הערה ליום">
             <input
               className="field-input"
               value={note}
               onChange={(e) => setNote(e.target.value)}
-              onBlur={() => note !== (entry?.note ?? '') && onSaveDay(date, { date, status: entry?.status ?? null, note: note || null })}
+              onBlur={() => note !== (entry?.note ?? '') && onSaveDay(date, { date, status: entry?.status ?? null, note: note || null, absence: entry?.absence ?? null })}
             />
           </Field>
         </div>
-        <p className="-mt-2 text-[12px] text-ink-soft">סטטוס היעדרות אינו יוצר שעות עבודה ואינו מחשב זכויות (חופשה, מחלה וכו').</p>
+        <p className="-mt-2 text-[12px] text-ink-soft">
+          סוג היום נקבע ידנית בלבד. היעדרות אינה נספרת כשעות עבודה בפועל; שעות ותשלום ההיעדרות מחושבים כהערכה לפי הגדרות ההיעדרות ומסומנים לבדיקה כשחסר מידע.
+        </p>
+        {entry?.status && ['vacation', 'sick', 'holiday', 'election', 'unpaid'].includes(entry.status) && (
+          <AbsenceDetailsEditor key={`${date}-${entry.status}`} day={day} entry={entry} onSave={(absence) => onSaveDay(date, { ...entry, absence })} />
+        )}
+        <AttendancePanel day={day} />
 
         {warnings.length > 0 && (
           <div>
@@ -1027,6 +1203,166 @@ function DayDrawer({
         )}
       </div>
     </Drawer>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Absence details (partial day, override, holiday / election confirmation) and the paid-attendance explanation
+// ---------------------------------------------------------------------------
+
+function AbsenceDetailsEditor({ day, entry, onSave }: { day: DayResult; entry: DayEntry; onSave: (a: AbsenceDetails | null) => void }) {
+  const ui = useUi();
+  const a = entry.absence ?? {};
+  const kind = entry.status!;
+  const save = (patch: Partial<AbsenceDetails>) => {
+    const next: AbsenceDetails = { ...a, ...patch };
+    for (const k of Object.keys(next) as (keyof AbsenceDetails)[]) if (next[k] === null || next[k] === undefined || next[k] === '') delete next[k];
+    onSave(Object.keys(next).length ? next : null);
+  };
+  const [minutes, setMinutes] = useState(a.minutes ? hm(a.minutes) : '');
+  const [pct, setPct] = useState(a.payPercentOverride !== undefined && a.payPercentOverride !== null ? String(a.payPercentOverride) : '');
+  const [reason, setReason] = useState(a.overrideReason ?? '');
+  const [holidayName, setHolidayName] = useState(a.holidayName ?? '');
+  return (
+    <div className="space-y-3 rounded-xl border border-line p-4" data-testid="absence-details">
+      <h3 className="text-[13px] font-semibold">פרטי {ABSENCE_LABELS[kind]}</h3>
+      <div className="grid grid-cols-2 gap-3">
+        <Field label="שעות היעדרות (חלק מהיום)" hint="ריק = יום מלא לפי מערכת השעות של העובד">
+          <input
+            className="field-input num text-left"
+            placeholder="ש:דד"
+            value={minutes}
+            aria-label="שעות היעדרות"
+            onChange={(e) => setMinutes(e.target.value)}
+            onBlur={() => {
+              const v = parseBreakInput(minutes.includes(':') ? minutes : minutes ? `${minutes}:00` : '');
+              if (v === 'invalid' || v === 0) return ui.toast('משך לא תקין — יש להזין ש:דד', 'error');
+              if ((v ?? undefined) !== a.minutes) save({ minutes: v ?? undefined });
+            }}
+          />
+        </Field>
+        {(kind === 'vacation' || kind === 'sick') && (
+          <Field label="שיעור תשלום חלופי (%)" hint={kind === 'sick' ? 'לא יפחת מהשיעור לפי החוק' : 'ריק = לפי ההגדרות'}>
+            <input
+              className="field-input num text-left"
+              value={pct}
+              inputMode="numeric"
+              aria-label="שיעור תשלום חלופי"
+              onChange={(e) => setPct(e.target.value)}
+              onBlur={() => {
+                const v = pct.trim() === '' ? undefined : Number(pct);
+                if (v !== undefined && (!Number.isInteger(v) || v < 0 || v > 100)) return ui.toast('שיעור בין 0 ל-100', 'error');
+                if (v !== a.payPercentOverride) save({ payPercentOverride: v });
+              }}
+            />
+          </Field>
+        )}
+        {(kind === 'vacation' || kind === 'sick') && pct.trim() !== '' && (
+          <Field label="סיבת השינוי (חובה)">
+            <input className="field-input" value={reason} aria-label="סיבת השינוי" onChange={(e) => setReason(e.target.value)} onBlur={() => reason !== (a.overrideReason ?? '') && save({ overrideReason: reason || undefined })} />
+          </Field>
+        )}
+        {kind === 'holiday' && (
+          <Field label="החג" hint={day.holidayName ? `לפי לוח השנה: ${day.holidayName}` : 'התאריך אינו חג בלוח השנה — יש לציין ולאשר'}>
+            <input
+              className="field-input"
+              value={holidayName}
+              placeholder={day.holidayName ?? ''}
+              aria-label="שם החג"
+              onChange={(e) => setHolidayName(e.target.value)}
+              onBlur={() => holidayName !== (a.holidayName ?? '') && save({ holidayName: holidayName || undefined })}
+            />
+          </Field>
+        )}
+        {kind === 'election' && (
+          <Field label="סוג הבחירות">
+            <Select<string>
+              value={a.electionType ?? ''}
+              onChange={(v) => save({ electionType: (v || null) as AbsenceDetails['electionType'] })}
+              options={[
+                { value: '', label: 'לא נבחר (דורש בדיקה)' },
+                { value: 'knesset', label: 'בחירות לכנסת' },
+                { value: 'local', label: 'בחירות לרשויות המקומיות' },
+                { value: 'other', label: 'יום בחירות אחר — בדיקה ידנית' },
+              ]}
+            />
+          </Field>
+        )}
+        {(kind === 'holiday' || kind === 'election') && (
+          <Field label="זכאות" hint="ברירת מחדל: לפי כללי הזכאות וההגדרות">
+            <Select<string>
+              value={a.eligibility ?? ''}
+              onChange={(v) => save({ eligibility: (v || null) as AbsenceDetails['eligibility'] })}
+              options={[
+                { value: '', label: 'לפי הכללים (לא אושר ידנית)' },
+                { value: 'confirmed', label: 'זכאות אושרה ידנית' },
+                { value: 'not_eligible', label: 'העובד אינו זכאי' },
+              ]}
+            />
+          </Field>
+        )}
+      </div>
+    </div>
+  );
+}
+
+const BASIS_LABEL: Record<string, { label: string; tone: 'green' | 'blue' | 'amber' | 'slate' }> = {
+  rule: { label: 'לפי כלל', tone: 'green' },
+  estimate: { label: 'הערכה', tone: 'blue' },
+  review: { label: 'דורש בדיקה', tone: 'amber' },
+  none: { label: '', tone: 'slate' },
+};
+
+function AttendancePanel({ day }: { day: DayResult }) {
+  const a = day.attendance;
+  if (!a.category && !a.actualWorked) return null;
+  const rows: [string, string][] = [
+    ['שעות בפועל', hm(a.actualWorkedMinutes, '0:00')],
+    ...(a.paidAbsenceNominalMinutes > 0 || a.category
+      ? ([
+          ['היעדרות (שעות יום)', hm(a.paidAbsenceNominalMinutes, '0:00')],
+          ['שיעור תשלום', a.payPercent === null ? 'דורש בדיקה' : `${a.payPercent}%`],
+          ['היעדרות – שווה ערך לתשלום', hm(a.paidAbsenceEquivalentMinutes, '0:00')],
+        ] as [string, string][])
+      : []),
+    ['שעות משולמות', hm(a.payableEquivalentMinutes, '0:00')],
+    ['יום משולם', formatDays(a.paidDayHundredths)],
+    ...(a.sickDayIndex !== null ? ([['יום מחלה ברצף', String(a.sickDayIndex)], ['ניכוי ממכסת מחלה (הערכה)', formatDays(a.sickBalanceDeductionHundredths)]] as [string, string][]) : []),
+    ...(a.weeklyCreditMinutes > 0 ? ([['זיכוי לתקן השבועי', hm(a.weeklyCreditMinutes)]] as [string, string][]) : []),
+  ];
+  const basis = BASIS_LABEL[a.basis];
+  return (
+    <div data-testid="attendance-panel">
+      <h3 className="mb-2 flex items-center gap-2 text-[13px] font-semibold">
+        נוכחות בפועל ותשלום {basis.label && <Badge tone={basis.tone}>{basis.label}</Badge>}
+      </h3>
+      <table className="w-full text-[13px]">
+        <tbody className="[&>tr>td]:border-b [&>tr>td]:border-line/60 [&>tr>td]:py-1">
+          {rows.map(([l, v]) => (
+            <tr key={l}>
+              <td>{l}</td>
+              <td className="num text-left font-medium">{v}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {a.reviewReasons.length > 0 && (
+        <ul className="mt-2 space-y-1">
+          {a.reviewReasons.map((r, i) => (
+            <li key={i} className="rounded-lg bg-amber-50 px-3 py-1.5 text-[12.5px] text-amber-900">
+              {r}
+            </li>
+          ))}
+        </ul>
+      )}
+      {a.explanation.length > 0 && (
+        <div className="mt-2 space-y-1 rounded-xl border border-blue-100 bg-blue-50/40 p-3 text-[12.5px] leading-relaxed" data-testid="attendance-explanation">
+          {a.explanation.map((l, i) => (
+            <p key={i}>{l}</p>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 

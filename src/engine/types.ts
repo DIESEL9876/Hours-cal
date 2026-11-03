@@ -111,6 +111,10 @@ export interface EmployeeSettings {
   fridayOvertime?: FridayOvertimePolicy | 'inherit';
   /** Business defaults only: when the business Friday policy changed (see repo.updateBusiness). */
   fridayOvertimeHistory?: FridayPolicyChange[];
+  /** Paid-absence settings (1.1.7). */
+  absence?: AbsenceSettings;
+  /** Business defaults only: when the weekly-credit policy changed (never reaches into finalised months). */
+  weeklyCreditHistory?: WeeklyCreditChange[];
 }
 
 /**
@@ -125,6 +129,118 @@ export type FridayOvertimePolicy = 'all_overtime' | 'none';
 export interface FridayPolicyChange {
   from: LocalDate;
   value: FridayOvertimePolicy;
+}
+
+// ---------------------------------------------------------------------------
+// Paid absences (1.1.7)
+// ---------------------------------------------------------------------------
+
+export type SalaryType = 'monthly' | 'hourly' | 'daily';
+/** How the hours of a paid absence day are determined. 'auto' = schedule for monthly, 3-month average for hourly/daily. */
+export type PaidDayReference = 'auto' | 'schedule' | 'average_3m' | 'fixed';
+/** 'statutory' = Annual Leave Law (full pay); 'manual' = no automatic payment (enter it per day). */
+export type VacationProfile = 'statutory' | 'manual';
+/** 'statutory' = Sick Pay Law s.2 (0% / 50% / 50% / 100%); others are more favourable arrangements. */
+export type SickProfile = 'statutory' | 'full_from_day2' | 'full_from_day1';
+/** 'statutory' = by salary type (monthly: included; hourly/daily: extension-order conditions). */
+export type HolidayFramework = 'statutory' | 'all_paid' | 'manual';
+export type ElectionHandling = 'statutory' | 'manual';
+/** Whether paid absence hours count toward the weekly regular allowance (42 h) for later work that week. */
+export type WeeklyCreditPolicy = 'paid_absence' | 'none';
+
+/** Absence settings. On employees every field may be 'inherit' (or absent) = the business setting. */
+export interface AbsenceSettings {
+  salaryType?: SalaryType | 'inherit';
+  paidDayReference?: PaidDayReference | 'inherit';
+  /** Minutes of a paid day when paidDayReference = 'fixed'. */
+  paidDayMinutes?: number | null;
+  vacation?: VacationProfile | 'inherit';
+  sick?: SickProfile | 'inherit';
+  holiday?: HolidayFramework | 'inherit';
+  election?: ElectionHandling | 'inherit';
+  weeklyCredit?: WeeklyCreditPolicy | 'inherit';
+  /** Employees only: employment start date (seniority conditions for holidays / election day). */
+  employmentStart?: LocalDate | null;
+}
+
+export interface ResolvedAbsenceSettings {
+  salaryType: SalaryType;
+  /** False when nobody chose a salary type (defaults to monthly and is flagged for review). */
+  salaryTypeExplicit: boolean;
+  paidDayReference: Exclude<PaidDayReference, 'auto'>;
+  paidDayMinutes: number | null;
+  vacation: VacationProfile;
+  sick: SickProfile;
+  holiday: HolidayFramework;
+  election: ElectionHandling;
+  weeklyCredit: WeeklyCreditPolicy;
+  employmentStart: LocalDate | null;
+}
+
+export interface WeeklyCreditChange {
+  from: LocalDate;
+  value: WeeklyCreditPolicy;
+}
+
+/** Business absence defaults passed to the engine. */
+export interface BusinessAbsenceDefaults {
+  settings: AbsenceSettings;
+  weeklyCreditHistory: WeeklyCreditChange[];
+}
+
+/**
+ * Per-day accounting of actual vs. paid attendance. All minutes are integers (equivalents are rounded
+ * half-up per day); day values are in hundredths of a day. Totals are sums of these daily values.
+ */
+export interface DayAttendance {
+  category: DayStatusKind | null;
+  /** Net minutes physically worked (the engine's net, no absence time ever added). */
+  actualWorkedMinutes: number;
+  actualWorked: boolean;
+  /** Absent portion of the scheduled day, hundredths (0–100). */
+  absenceDayHundredths: number;
+  /** Scheduled hours of the absent portion (before the payment rate). */
+  paidAbsenceNominalMinutes: number;
+  /** Payment rate applied to the absence, %. null = cannot be determined (review). */
+  payPercent: number | null;
+  /** Nominal × rate — compensated hour-equivalents (no overtime premiums). */
+  paidAbsenceEquivalentMinutes: number;
+  /** Paid-absence minutes credited toward the weekly regular allowance. */
+  weeklyCreditMinutes: number;
+  /** actualWorkedMinutes + paidAbsenceEquivalentMinutes. */
+  payableEquivalentMinutes: number;
+  /** Payable day-equivalent of the date, hundredths (0–100). */
+  paidDayHundredths: number;
+  /** The paid-absence part of paidDayHundredths (absent portion × rate), hundredths. */
+  paidAbsenceDayHundredths: number;
+  /** Day number within a continuous sickness period (calendar days). */
+  sickDayIndex: number | null;
+  /** Estimated sick-balance deduction for this date, hundredths of a day (balance itself is not managed). */
+  sickBalanceDeductionHundredths: number;
+  /** 'rule' = statutory/contract rule fully applied; 'estimate' = depends on payroll data; 'review' = missing info. */
+  basis: 'none' | 'rule' | 'estimate' | 'review';
+  reviewReasons: string[];
+  explanation: string[];
+}
+
+export interface AttendanceTotals {
+  actualWorkedDays: number;
+  actualWorkedMinutes: number;
+  paidDayHundredths: number;
+  payableEquivalentMinutes: number;
+  paidAbsenceNominalMinutes: number;
+  paidAbsenceEquivalentMinutes: number;
+  weeklyCreditMinutes: number;
+  vacationDayHundredths: number;
+  sickDayHundredths: number;
+  /** Sick days expressed as paid day-equivalents (e.g. a 50% day = 0.50). */
+  sickPaidDayHundredths: number;
+  sickBalanceDeductionHundredths: number;
+  holidayDayHundredths: number;
+  electionDayHundredths: number;
+  unpaidDayHundredths: number;
+  /** Absence days whose entitlement needs a human check. */
+  reviewDays: number;
 }
 
 export interface SettingsVersion {
@@ -154,12 +270,37 @@ export interface ShiftInput {
   note?: string;
 }
 
-export type DayStatusKind = 'not_worked' | 'vacation' | 'sick' | 'holiday' | 'reserve' | 'missing_record';
+/**
+ * Day type ("סוג יום"). Always chosen or confirmed by the user — never assigned automatically.
+ * 1.1.7 added 'work' (explicit regular workday), 'election' and 'unpaid'; earlier values keep their meaning.
+ */
+export type DayStatusKind = 'work' | 'not_worked' | 'vacation' | 'sick' | 'holiday' | 'election' | 'unpaid' | 'reserve' | 'missing_record';
+
+/** Details of an absence the user entered for a date (all optional). */
+export interface AbsenceDetails {
+  /** Partial-day absence length in minutes. Absent/null = the whole scheduled day. */
+  minutes?: number | null;
+  /** Manual payment percentage (0–100) — a controlled override that requires a reason. */
+  payPercentOverride?: number | null;
+  overrideReason?: string | null;
+  /** Election type for 'election' days. */
+  electionType?: 'knesset' | 'local' | 'other' | null;
+  /** Holiday the user selected / confirmed for 'holiday' days. */
+  holidayName?: string | null;
+  /**
+   * The user's confirmation of conditions the system cannot know: employer consent to an absence around a
+   * holiday, voter registration for local elections, etc. 'not_eligible' = the user determined no entitlement.
+   */
+  eligibility?: 'confirmed' | 'not_eligible' | null;
+  /** A suggestion the user rejected (kept so it is not offered again). */
+  rejectedSuggestion?: DayStatusKind | null;
+}
 
 export interface DayStatus {
   date: LocalDate;
   status: DayStatusKind;
   note?: string;
+  absence?: AbsenceDetails | null;
 }
 
 export interface CustomHoliday {
@@ -266,6 +407,8 @@ export interface DayResult {
   payAgorot: number | null;
   /** Set only when the Friday "all hours are overtime" policy classified this day. */
   fridayOvertimeApplied?: boolean;
+  /** Actual vs. paid attendance of the date (1.1.7). */
+  attendance: DayAttendance;
 }
 
 export interface WeekResult {
@@ -277,6 +420,8 @@ export interface WeekResult {
   dailyOvertimeMinutes: number;
   weeklyOvertimeMinutes: number;
   warnings: Warning[];
+  /** Paid-absence minutes credited toward the weekly allowance (present only when > 0). */
+  absenceCreditMinutes?: number;
 }
 
 export interface PeriodTotals {
@@ -308,6 +453,13 @@ export interface EmployeePeriodInput {
   to: LocalDate;
   /** Business Friday policy history, used for employees whose setting is 'inherit'. Absent = 'none'. */
   businessFriday?: FridayPolicyChange[];
+  /** Business absence defaults (1.1.7). Absent = statutory defaults, no weekly credit. */
+  businessAbsence?: BusinessAbsenceDefaults;
+  /**
+   * Earliest date for which shifts and day statuses were loaded (continuous sickness periods and 3-month
+   * averages look back this far). Default: the start of the weekly data range.
+   */
+  historyFrom?: LocalDate;
 }
 
 export interface EmployeePeriodResult {
@@ -320,4 +472,6 @@ export interface EmployeePeriodResult {
   weeks: WeekResult[];
   totals: PeriodTotals;
   warnings: Warning[];
+  /** Actual vs. paid attendance totals of the period (1.1.7) — sums of days[].attendance. */
+  attendance: AttendanceTotals;
 }

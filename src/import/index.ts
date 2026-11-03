@@ -8,7 +8,7 @@ import { gridFromXls, readCsv, readHtmlTable, readXlsx, decodeText, type RawXlsS
 import { ImportError, type Grid } from './types';
 
 export * from './types';
-export { detectTable, readRecords, mappingFromSelection } from './analyze';
+export { detectTable, readRecords, mappingFromSelection, detectDayCategory } from './analyze';
 export { buildPreview, evaluateRow, countPreview, buildImportChanges, monthsInRecords, isIncludable, willWrite, defaultInclude, type PlanContext } from './plan';
 export { sameEmployee, nameKey } from './values';
 export type { OcrProgress } from './ocr';

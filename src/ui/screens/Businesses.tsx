@@ -139,7 +139,7 @@ function BusinessForm({ business, onClose, onSaved }: { business: Business | nul
   const ui = useUi();
   const [name, setName] = useState(business?.name ?? '');
   const [identifier, setIdentifier] = useState(business?.identifier ?? '');
-  const [defaults, setDefaults] = useState<EmployeeSettings>(business?.defaults ?? defaultEmployeeSettings());
+  const [defaults, setDefaults] = useState<EmployeeSettings>(business?.defaults ?? defaultEmployeeSettings({ absence: { weeklyCredit: 'paid_absence' } }));
   const [busy, setBusy] = useState(false);
   const errors = validateSettings(defaults);
 

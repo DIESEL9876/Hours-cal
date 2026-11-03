@@ -32,6 +32,7 @@ import type {
 import { CalendarContext, type Interval } from './calendar';
 import { calculateDeductibleBreakMinutes, calculateNetWorkedMinutes } from './breaks';
 import { fridayPolicyOn, LAW, OFFICE_POLICY, resolveSettings } from './settings';
+import { absenceHistoryFrom, computeDayAttendance, emptyDayAttendance, sumAttendance, type AbsenceContext } from './absence';
 import {
   addDays,
   eachDate,
@@ -439,9 +440,11 @@ interface DayWork {
   payUnits: number | null;
   /** Five-day week, Friday, office policy "all Friday hours are overtime". */
   fridayAll: boolean;
+  /** Paid-absence minutes credited to the weekly allowance earlier in the same week. */
+  weekCreditBefore?: number;
 }
 
-export function calculateEmployeePeriod(input: EmployeePeriodInput): EmployeePeriodResult {
+export function calculateEmployeePeriod(input: EmployeePeriodInput, opts: { skipAbsence?: boolean } = {}): EmployeePeriodResult {
   const { from, to } = input;
   if (from > to) throw new Error('from > to');
   const calcFrom = weekStartOf(from);
@@ -497,6 +500,7 @@ export function calculateEmployeePeriod(input: EmployeePeriodInput): EmployeePer
       warnings: [],
       explanation: [],
       payAgorot: null,
+      attendance: emptyDayAttendance(0, statusByDate.get(date)?.status ?? null),
     };
     if (!version && raw.length > 0) warn(dr.warnings, 'NO_SETTINGS', 'error', 'אין הגדרות עובד בתוקף לתאריך זה', date);
     dayWork.set(date, {
@@ -552,7 +556,9 @@ export function calculateEmployeePeriod(input: EmployeePeriodInput): EmployeePer
     if (dw.status) {
       if (dw.status.status === 'missing_record')
         warn(dr.warnings, 'MISSING_RECORD', 'error', 'היום סומן כ"רישום חסר" – יש להשלים את הנתונים', dr.date);
-      else if (dr.worked) warn(dr.warnings, 'STATUS_CONFLICT', 'review', 'ליום שסומן כהיעדרות נרשמו גם שעות עבודה', dr.date);
+      // "עבודה רגילה" and a partial-day absence (1.1.7) are not a conflict with recorded work.
+      else if (dr.worked && dw.status.status !== 'work' && !dw.status.absence?.minutes)
+        warn(dr.warnings, 'STATUS_CONFLICT', 'review', 'ליום שסומן כהיעדרות נרשמו גם שעות עבודה', dr.date);
     }
     if (dw.version) {
       const s = dw.version.settings;
@@ -583,6 +589,60 @@ export function calculateEmployeePeriod(input: EmployeePeriodInput): EmployeePer
     }
   }
 
+  // Actual vs. paid attendance (user-classified absences only). Computed before the weekly classification
+  // because qualifying paid absences may credit the weekly allowance for later work in the same week.
+  const credits = new Map<LocalDate, number>();
+  if (!opts.skipAbsence) {
+    const historyFrom = input.historyFrom && input.historyFrom < ext.from ? input.historyFrom : ext.from;
+    let history: Map<LocalDate, number> | null = null;
+    const historyNet = () => {
+      if (!history) {
+        history = new Map();
+        if (historyFrom < ext.from) {
+          const h = calculateEmployeePeriod({ ...input, from: historyFrom, to: addDays(ext.from, -1) }, { skipAbsence: true });
+          for (const d of h.days) history.set(d.date, d.netMinutes);
+        }
+      }
+      return history;
+    };
+    const netByDate = (date: LocalDate) => dayWork.get(date)?.result.netMinutes ?? historyNet().get(date) ?? 0;
+    const wideCal = new CalendarContext(addDays(historyFrom, -3), addDays(calcTo, 14), input.customHolidays);
+    const avgCache = new Map<string, { minutes: number; days: number } | null>();
+    const ctx: AbsenceContext = {
+      statusByDate,
+      netByDate,
+      versionOn: (date) => resolveSettings(input.settingsVersions, date),
+      scheduledMinutes: (date, st) => scheduledDayMinutes(date, st, wideCal),
+      averageDaily: (date) => {
+        const key = date.slice(0, 7);
+        if (!avgCache.has(key)) {
+          let total = 0;
+          let days = 0;
+          const start = absenceAverageWindow(date);
+          if (start.from < historyFrom) avgCache.set(key, null);
+          else {
+            for (const d of eachDate(start.from, start.to)) {
+              const n = netByDate(d);
+              if (n > 0) {
+                total += n;
+                days++;
+              }
+            }
+            avgCache.set(key, days ? { minutes: Math.round(total / days), days } : null);
+          }
+        }
+        return avgCache.get(key)!;
+      },
+      business: input.businessAbsence,
+      cal: wideCal,
+      historyFrom,
+    };
+    for (const dw of dayWork.values()) {
+      dw.result.attendance = computeDayAttendance(dw.date, dw.status, ctx);
+      if (dw.result.attendance.weeklyCreditMinutes) credits.set(dw.date, dw.result.attendance.weeklyCreditMinutes);
+    }
+  }
+
   // Weekly classification — chronological, Sunday→Saturday, across month boundaries.
   const weeks: WeekResult[] = [];
   for (let ws = calcFrom; ws <= calcTo; ws = addDays(ws, 7)) {
@@ -599,15 +659,29 @@ export function calculateEmployeePeriod(input: EmployeePeriodInput): EmployeePer
     };
     let weeklyRegular = 0;
     let weeklyOtCount = 0;
+    let weekCredit = 0;
     for (const date of eachDate(ws, we)) {
       const dw = dayWork.get(date)!;
       const dr = dw.result;
       week.netMinutes += dr.netMinutes;
-      if (!dw.version || dw.minutes.length === 0) continue;
+      // A paid absence of this day counts toward the weekly allowance only for work AFTER it (added at the end).
+      const credit = credits.get(date) ?? 0;
+      dw.weekCreditBefore = weekCredit;
+      const addCredit = () => {
+        if (credit) {
+          weeklyRegular += credit;
+          weekCredit += credit;
+        }
+      };
+      if (!dw.version || dw.minutes.length === 0) {
+        addCredit();
+        continue;
+      }
       const s = dw.version.settings;
       const t = dw.threshold!;
       if (t.minutes === null || t.weeklyMinutes === null) {
         dr.buckets.unclassified += dw.minutes.length;
+        addCredit();
         continue;
       }
       week.weeklyThresholdMinutes = t.weeklyMinutes;
@@ -654,8 +728,10 @@ export function calculateEmployeePeriod(input: EmployeePeriodInput): EmployeePer
       });
       week.dailyOvertimeMinutes += dr.dailyOvertimeMinutes;
       week.weeklyOvertimeMinutes += dr.weeklyOvertimeMinutes;
+      addCredit();
     }
     week.regularCountedMinutes = weeklyRegular;
+    if (weekCredit) week.absenceCreditMinutes = weekCredit;
 
     // Weekly compliance checks (attached to the last worked day of the week inside the period).
     const weekOt = week.dailyOvertimeMinutes + week.weeklyOvertimeMinutes;
@@ -738,7 +814,7 @@ export function calculateEmployeePeriod(input: EmployeePeriodInput): EmployeePer
     eachDate(from, to).map((d) => dayWork.get(d)!),
     periodWarnings,
   );
-  return { employeeId: input.employeeId, from, to, days, weeks: relevantWeeks, totals, warnings: periodWarnings };
+  return { employeeId: input.employeeId, from, to, days, weeks: relevantWeeks, totals, warnings: periodWarnings, attendance: sumAttendance(days.map((d) => d.attendance)) };
 }
 
 function checkWeeklyRest(
@@ -814,6 +890,7 @@ function buildExplanation(dw: DayWork) {
     if (weekly125) wp.push(`${formatDurationHe(weekly125)} בתעריף 125%`);
     if (weekly150) wp.push(`${formatDurationHe(weekly150)} בתעריף 150%`);
     lines.push(`מכסת השעות הרגילות השבועית (${formatDurationHe(t.weeklyMinutes!)}) נוצלה, ולכן סווגו כשעות נוספות שבועיות: ${wp.join(' ו-')}. אותן דקות לא נספרו פעמיים.`);
+    if (dw.weekCreditBefore) lines.push(`המכסה כוללת זיכוי של ${formatDurationHe(dw.weekCreditBefore)} בגין היעדרות בתשלום מוקדם יותר בשבוע (שעות ההיעדרות עצמן אינן שעות נוספות).`);
   }
   const b = dr.buckets;
   const rest = b.rest150 + b.rest175 + b.rest200;
@@ -905,3 +982,36 @@ export function dedupeWarnings(ws: Warning[]): Warning[] {
 export function calculateMonthlyTotals(result: EmployeePeriodResult): PeriodTotals {
   return result.totals;
 }
+
+// ---------------------------------------------------------------------------
+// Paid-absence helpers (1.1.7)
+// ---------------------------------------------------------------------------
+
+/**
+ * Scheduled minutes of a regular day for paid-absence purposes: 0 on a day that is not one of the employee's
+ * working days; otherwise the part-time contract hours, or the employee's daily standard for that date
+ * (five-day: 8:24 office policy / 7:36 shortened day; six-day: 8:00 / 7:00 before the rest day; custom contract).
+ * Holidays are NOT removed here (a holiday absence needs the hours the day would have had).
+ */
+export function scheduledDayMinutes(date: LocalDate, s: EmployeeSettings, cal: CalendarContext): number {
+  if (!s.workDays.includes(weekdayOf(date) as Weekday)) return 0;
+  if (s.contractDailyMinutes !== null) return s.contractDailyMinutes;
+  const general = s.legalProfile === 'exempt' || s.legalProfile === 'minor' ? { ...s, legalProfile: 'general_private' as const } : s;
+  return getApplicableDailyThreshold(date, general, cal, false).minutes ?? 0;
+}
+
+/** The 3 calendar months before the month of `date` (average daily hours for hourly/daily employees). */
+export function absenceAverageWindow(date: LocalDate): { from: LocalDate; to: LocalDate } {
+  const y = +date.slice(0, 4);
+  const m = +date.slice(5, 7);
+  const first = `${y}-${String(m).padStart(2, '0')}-01`;
+  let fy = y;
+  let fm = m - 3;
+  if (fm < 1) {
+    fm += 12;
+    fy--;
+  }
+  return { from: `${fy}-${String(fm).padStart(2, '0')}-01`, to: addDays(first, -1) };
+}
+
+export { absenceHistoryFrom };

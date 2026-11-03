@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import initSqlJs from 'sql.js';
 import { SqlJsDriver, type SqlJsPersistence } from '../sqljsDriver';
 import { Repository, RepoError } from '../repo';
+import { SCHEMA_VERSION } from '../schema';
 import { computeBusinessMonth, computeEmployeeMonth, sha256Hex, snapshotOf } from '../service';
 import { defaultEmployeeSettings } from '../../engine';
 import type { BackupInfo } from '../driver';
@@ -52,8 +53,8 @@ function addDay(d: string) {
 describe('migrations', () => {
   it('are idempotent', async () => {
     const repo = await fresh();
-    expect(await repo.migrate()).toBe(1);
-    expect(await repo.migrate()).toBe(1);
+    expect(await repo.migrate()).toBe(SCHEMA_VERSION);
+    expect(await repo.migrate()).toBe(SCHEMA_VERSION);
   });
 });
 

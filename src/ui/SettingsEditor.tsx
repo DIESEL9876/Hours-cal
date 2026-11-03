@@ -5,6 +5,7 @@ import {
   HEBREW_WEEKDAYS,
   ISRAELI_CITIES,
   SIX_DAY_WORKDAYS,
+  type AbsenceSettings,
   type CustomProfile,
   type EmployeeSettings,
   type FridayOvertimePolicy,
@@ -49,11 +50,136 @@ export const FRIDAY_OVERTIME_LABELS: Record<FridayOvertimePolicy, string> = {
   none: 'ללא תוספת אוטומטית לשעות יום שישי',
 };
 
+// ---------------------------------------------------------------------------
+// Absence and paid-day settings (version 1.1.7)
+// ---------------------------------------------------------------------------
+
+type AbsenceField = Exclude<keyof AbsenceSettings, 'paidDayMinutes' | 'employmentStart'>;
+
+export const ABSENCE_SETTING_OPTIONS: Record<AbsenceField, { label: string; options: { value: string; label: string }[]; fallback: string }> = {
+  salaryType: {
+    label: 'סוג העסקה',
+    fallback: 'monthly',
+    options: [
+      { value: 'monthly', label: 'עובד חודשי' },
+      { value: 'hourly', label: 'עובד שעתי' },
+      { value: 'daily', label: 'עובד יומי' },
+    ],
+  },
+  paidDayReference: {
+    label: 'שעות יום משולם',
+    fallback: 'auto',
+    options: [
+      { value: 'auto', label: 'אוטומטי (חודשי: מערכת שעות; שעתי/יומי: ממוצע 3 חודשים)' },
+      { value: 'schedule', label: 'לפי מערכת השעות של העובד' },
+      { value: 'average_3m', label: 'ממוצע יומי ב-3 החודשים הקודמים' },
+      { value: 'fixed', label: 'מספר שעות קבוע' },
+    ],
+  },
+  vacation: {
+    label: 'חופשה',
+    fallback: 'statutory',
+    options: [
+      { value: 'statutory', label: 'תשלום מלא (חוק חופשה שנתית)' },
+      { value: 'manual', label: 'ידני – דורש בדיקה' },
+    ],
+  },
+  sick: {
+    label: 'מחלה',
+    fallback: 'statutory',
+    options: [
+      { value: 'statutory', label: 'לפי החוק: 0% · 50% · 50% · 100%' },
+      { value: 'full_from_day2', label: 'מיטיב: 100% מהיום השני' },
+      { value: 'full_from_day1', label: 'מיטיב: 100% מהיום הראשון' },
+    ],
+  },
+  holiday: {
+    label: 'דמי חגים',
+    fallback: 'statutory',
+    options: [
+      { value: 'statutory', label: 'לפי צו ההרחבה (בדיקת זכאות)' },
+      { value: 'all_paid', label: 'הסכמי: כל חג ביום עבודה משולם' },
+      { value: 'manual', label: 'ידני – דורש בדיקה' },
+    ],
+  },
+  election: {
+    label: 'יום בחירות',
+    fallback: 'statutory',
+    options: [
+      { value: 'statutory', label: 'לפי חוק הבחירות (בדיקת זכאות)' },
+      { value: 'manual', label: 'ידני – דורש בדיקה' },
+    ],
+  },
+  weeklyCredit: {
+    label: 'היעדרות בתשלום ותקן 42 השעות',
+    fallback: 'none',
+    options: [
+      { value: 'paid_absence', label: 'נספרת בתקן השבועי (שעות נוספות רק מעבר לתקן)' },
+      { value: 'none', label: 'אינה נספרת (כמו בגרסאות קודמות)' },
+    ],
+  },
+};
+
+const ABSENCE_FIELDS = Object.keys(ABSENCE_SETTING_OPTIONS) as AbsenceField[];
+const optionLabel = (f: AbsenceField, v: string | undefined) => ABSENCE_SETTING_OPTIONS[f].options.find((o) => o.value === v)?.label ?? '';
+
+function AbsenceSection({
+  value,
+  onChange,
+  scope,
+  businessAbsence,
+}: {
+  value: AbsenceSettings;
+  onChange: (a: AbsenceSettings) => void;
+  scope: 'business' | 'employee';
+  businessAbsence: AbsenceSettings;
+}) {
+  const a = value;
+  const set = (patch: Partial<AbsenceSettings>) => {
+    const next: AbsenceSettings = { ...a, ...patch };
+    for (const k of Object.keys(next) as (keyof AbsenceSettings)[]) if (next[k] === undefined || next[k] === '' || next[k] === 'inherit') delete next[k];
+    onChange(next);
+  };
+  const ownRef = a.paidDayReference && a.paidDayReference !== 'inherit' ? a.paidDayReference : undefined;
+  const effectiveRef = ownRef ?? (scope === 'employee' ? businessAbsence.paidDayReference : undefined);
+  return (
+    <div className="grid grid-cols-3 gap-3" data-testid="absence-settings">
+      {ABSENCE_FIELDS.map((f) => {
+        const meta = ABSENCE_SETTING_OPTIONS[f];
+        const own = a[f] && a[f] !== 'inherit' ? (a[f] as string) : '';
+        const biz = (businessAbsence[f] as string | undefined) ?? '';
+        const options =
+          scope === 'employee'
+            ? [{ value: '', label: `לפי הגדרת העסק (${optionLabel(f, biz || meta.fallback)}${!biz && f === 'salaryType' ? ' – לא נקבע' : ''})` }, ...meta.options]
+            : f === 'salaryType'
+              ? [{ value: '', label: 'לא נקבע (חודשי – מסומן לבדיקה)' }, ...meta.options]
+              : meta.options;
+        return (
+          <Field key={f} label={meta.label}>
+            <Select<string> value={scope === 'business' && f !== 'salaryType' ? own || meta.fallback : own} onChange={(v) => set({ [f]: v || undefined })} options={options} />
+          </Field>
+        );
+      })}
+      {effectiveRef === 'fixed' && (
+        <Field label="שעות ליום משולם (ש:דד)">
+          <MinutesInput value={a.paidDayMinutes ?? businessAbsence.paidDayMinutes ?? 504} min={1} onChange={(v) => set({ paidDayMinutes: v })} />
+        </Field>
+      )}
+      {scope === 'employee' && (
+        <Field label="תחילת העבודה" hint="לבדיקת ותק לדמי חג וליום בחירות">
+          <input type="date" className="field-input num" value={a.employmentStart ?? ''} aria-label="תאריך תחילת העבודה" onChange={(e) => set({ employmentStart: e.target.value || undefined })} />
+        </Field>
+      )}
+    </div>
+  );
+}
+
 export function SettingsEditor({
   value,
   onChange,
   scope = 'employee',
   businessFriday = 'none',
+  businessAbsence = {},
 }: {
   value: EmployeeSettings;
   onChange: (s: EmployeeSettings) => void;
@@ -61,6 +187,8 @@ export function SettingsEditor({
   scope?: 'business' | 'employee';
   /** Current business Friday setting (shown next to "לפי הגדרת העסק"). */
   businessFriday?: FridayOvertimePolicy;
+  /** Business absence defaults (shown next to "לפי הגדרת העסק"). */
+  businessAbsence?: AbsenceSettings;
 }) {
   const s = value;
   const set = (patch: Partial<EmployeeSettings>) => onChange({ ...s, ...patch });
@@ -323,6 +451,17 @@ export function SettingsEditor({
             <Checkbox checked={s.restMinutesCountTowardWeekly} onChange={(v) => set({ restMinutesCountTowardWeekly: v })} label="שעות במנוחה/חג נספרות במכסת 42 השעות השבועית" />
           </div>
         </div>
+      </Section>
+
+      <Section
+        title="הגדרות היעדרות וימי תשלום"
+        note={
+          scope === 'business'
+            ? 'ברירת מחדל לעובדים המוגדרים "לפי הגדרת העסק". סוג היום נקבע תמיד ידנית; תשלום ההיעדרות הוא הערכה לבדיקה ואינו תלוש שכר. שינוי הספירה בתקן השבועי חל מהחודש שאחרי החודש האחרון שנסגר.'
+            : 'ברירת המחדל היא הגדרת העסק. סוג היום נקבע תמיד ידנית; תשלום ההיעדרות הוא הערכה לבדיקה ואינו תלוש שכר.'
+        }
+      >
+        <AbsenceSection value={s.absence ?? {}} onChange={(absence) => set({ absence })} scope={scope} businessAbsence={businessAbsence} />
       </Section>
     </div>
   );

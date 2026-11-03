@@ -4,8 +4,8 @@
  * silently: conflicts default to keeping the existing record.
  */
 import { useEffect, useMemo, useState } from 'react';
-import { monthRange, type LocalDate, type ShiftInput } from '../../engine';
-import type { Employee } from '../../data/repo';
+import { monthRange, type DayStatusKind, type LocalDate, type ShiftInput } from '../../engine';
+import type { DayEntry, Employee } from '../../data/repo';
 import { isTauri } from '../../data/tauriDriver';
 import { useApp } from '../App';
 import { Badge, Button, Checkbox, Field, Modal, Segmented, Select, useUi } from '../components';
@@ -40,6 +40,8 @@ import {
 export interface ImportResult {
   added: ShiftInput[];
   removed: ShiftInput[];
+  /** Day categories the user chose to apply from the report (exact before/after, for undo). */
+  dayTypes: { date: LocalDate; before: DayEntry | null; after: DayEntry | null }[];
   year: number;
   month: number;
 }
@@ -109,7 +111,9 @@ export function AttendanceImportDialog({
   const [mappingConfirmed, setMappingConfirmed] = useState(false);
   const [sel, setSel] = useState<Sel>(selFromMapping(null));
   const [target, setTarget] = useState({ year, month });
-  const [existing, setExisting] = useState<{ shifts: ShiftInput[]; status: Map<LocalDate, string> } | null>(null);
+  const [existing, setExisting] = useState<{ shifts: ShiftInput[]; status: Map<LocalDate, string>; kinds: Map<LocalDate, DayStatusKind> } | null>(null);
+  /** Day categories found in the report are applied only when the user opts in (default: off). */
+  const [applyTypes, setApplyTypes] = useState(false);
   const [empChoice, setEmpChoice] = useState<string | null>(null);
   const [empConfirmed, setEmpConfirmed] = useState(false);
   const [gapIsBreak, setGapIsBreak] = useState(true);
@@ -176,6 +180,7 @@ export function AttendanceImportDialog({
       setExisting({
         shifts: sh.map((s) => ({ id: s.id, workDate: s.workDate, startAt: s.startAt, endAt: s.endAt, breakMinutes: s.breakMinutes, breakStart: s.breakStart, breakConfirmed: s.breakConfirmed, breakPaid: s.breakPaid, reviewed: s.reviewed, note: s.note })),
         status: new Map(en.filter((e) => e.status).map((e) => [e.date, DAY_STATUS_LABELS[e.status!]])),
+        kinds: new Map(en.filter((e) => e.status).map((e) => [e.date, e.status!])),
       });
       setFinalMonth(review.status === 'final');
     });
@@ -216,10 +221,19 @@ export function AttendanceImportDialog({
   }, [records, ctx]);
 
   const counts = countPreview(rows);
+  const proposals = useMemo(() => {
+    if (!read || !existing || empChoice === null) return [];
+    const { from, to } = monthRange(target.year, target.month);
+    return read.categoryHints
+      .filter((h) => h.date >= from && h.date <= to && empKey({ name: h.employee, number: h.employeeNo }) === empChoice)
+      .map((h) => ({ ...h, existing: existing.kinds.get(h.date) ?? null }));
+  }, [read, existing, empChoice, target]);
+  const applicableTypes = proposals.filter((p) => !p.existing);
   const hasMulti = rows.some((r) => r.segments.filter((s) => s.start || s.end).length > 1);
   const empReady = !multiEmployee || empChoice !== null;
   const empOk = empReady && (!nameMismatch || empConfirmed);
-  const canApprove = phase === 'review' && !!mapping && mappingConfirmed && empOk && counts.willImport > 0;
+  const typesToApply = applyTypes ? applicableTypes.length : 0;
+  const canApprove = phase === 'review' && !!mapping && mappingConfirmed && empOk && (counts.willImport > 0 || typesToApply > 0);
 
   const updateRow = (date: LocalDate, patch: Partial<PreviewRow>) => {
     if (!ctx) return;
@@ -254,7 +268,8 @@ export function AttendanceImportDialog({
     setPhase('saving');
     try {
       const changes = buildImportChanges(rows, ctx);
-      await repo.applyAttendanceImport(businessId, employee.id, changes, {
+      const dayTypes = applyTypes ? applicableTypes.map((p) => ({ before: null, after: { date: p.date, status: p.kind as DayStatusKind, note: null } as DayEntry })) : [];
+      const written = await repo.applyAttendanceImport(businessId, employee.id, { ...changes, dayTypes }, {
         fileName: file.name,
         fileBytes: file.size,
         format: grid?.format,
@@ -274,11 +289,13 @@ export function AttendanceImportDialog({
       const kept = rows.filter((r) => r.status === 'conflict' && r.conflictChoice === 'keep').length;
       if (kept) skipped.push(`${kept} ימים עם נתונים קיימים נשמרו ללא שינוי`);
       if (otherEmployeeRows) skipped.push(`${otherEmployeeRows} רשומות של עובדים אחרים בקובץ לא נקלטו`);
+      if (written.length) skipped.push(`${written.length} סוגי יום מהקובץ הוחלו לפי אישורך`);
+      if (proposals.length - written.length > 0) skipped.push(`${proposals.length - written.length} סוגי יום שזוהו בקובץ לא הוחלו`);
       if (read?.unreadableRows) skipped.push(`${read.unreadableRows} שורות בקובץ לא זוהו`);
       setDone({ days: changes.days.length, shifts: changes.add.length, replaced: changes.remove.length, skipped });
       setPhase('done');
       ui.toast(`נקלטו בהצלחה ${changes.days.length} ימי עבודה לדוח חודש ${monthTitle(target.year, target.month)}.`);
-      onImported({ added: changes.add, removed: changes.remove, year: target.year, month: target.month });
+      onImported({ added: changes.add, removed: changes.remove, dayTypes: written, year: target.year, month: target.month });
     } catch (e) {
       ui.toast(`הקליטה נכשלה ולא נשמר דבר: ${e instanceof Error ? e.message : String(e)}`, 'error');
       setPhase('review');
@@ -368,6 +385,7 @@ export function AttendanceImportDialog({
           </Button>
           <span className="ms-auto text-[12.5px] text-ink-soft">
             {counts.willImport > 0 ? `ייקלטו ${counts.willImport} ימים` : 'לא נבחרו ימים לקליטה'}
+            {typesToApply > 0 && ` · יוחלו ${typesToApply} סוגי יום`}
           </span>
         </>
       }
@@ -487,6 +505,30 @@ export function AttendanceImportDialog({
           {read && read.summaryRows > 0 && <Badge tone="slate">שורות סיכום שדולגו {read.summaryRows}</Badge>}
           {read && read.emptyDays > 0 && <Badge tone="slate">ימים ללא נוכחות {read.emptyDays}</Badge>}
         </div>
+
+        {proposals.length > 0 && (
+          <div className="rounded-lg bg-sky-50 p-3 text-[13px] text-sky-900 ring-1 ring-sky-200" data-testid="import-day-types">
+            <div className="mb-1.5 font-medium">סוגי יום שזוהו בקובץ — הצעה בלבד</div>
+            <div className="mb-2 flex flex-wrap gap-1.5">
+              {proposals.map((p) => (
+                <Badge key={p.date} tone={p.existing ? 'slate' : 'blue'} title={p.text}>
+                  <span className="num">{formatDateHe(p.date).slice(0, 5)}</span> {DAY_STATUS_LABELS[p.kind]}
+                  {p.existing && (p.existing === p.kind ? ' (כבר מסומן)' : ` (קיים: ${DAY_STATUS_LABELS[p.existing]} — לא ישתנה)`)}
+                </Badge>
+              ))}
+            </div>
+            {applicableTypes.length > 0 ? (
+              <Checkbox
+                checked={applyTypes}
+                onChange={setApplyTypes}
+                label={`להחיל ${applicableTypes.length} סוגי יום מוצעים על תאריכים שאין להם סוג יום`}
+                hint="ללא סימון — סוגי היום אינם נשמרים. סוג יום קיים לעולם אינו מוחלף. זכאות לתשלום נבדקת בנפרד בדוח השעות."
+              />
+            ) : (
+              <span className="text-[12px]">לכל התאריכים כבר קיים סוג יום — הם לא ישתנו.</span>
+            )}
+          </div>
+        )}
 
         {hasMulti && (
           <Checkbox

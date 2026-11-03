@@ -7,14 +7,24 @@ import { MIGRATIONS } from './schema';
 import type {
   CustomHoliday,
   DayStatus,
+  AbsenceDetails,
   DayStatusKind,
   EmployeeSettings,
   FridayPolicyChange,
+  WeeklyCreditChange,
   LocalDate,
   SettingsVersion,
   ShiftInput,
 } from '../engine/types';
-import { BEGINNING_OF_TIME, businessFridayHistory, businessFridayOn, defaultEmployeeSettings, validateSettings } from '../engine/settings';
+import {
+  BEGINNING_OF_TIME,
+  businessFridayHistory,
+  businessFridayOn,
+  businessWeeklyCreditHistory,
+  businessWeeklyCreditOn,
+  defaultEmployeeSettings,
+  validateSettings,
+} from '../engine/settings';
 
 export interface Business {
   id: string;
@@ -49,6 +59,8 @@ export interface DayEntry {
   date: LocalDate;
   status: DayStatusKind | null;
   note: string | null;
+  /** 1.1.7: absence details (partial minutes, pay override, election type, holiday, eligibility, rejected suggestion). */
+  absence?: AbsenceDetails | null;
 }
 
 export type ReviewStatus = 'open' | 'in_review' | 'final';
@@ -102,22 +114,70 @@ type Row = Record<string, SqlValue>;
  * Business defaults: keep the Friday-policy history in step with the chosen value. Unchanged value →
  * unchanged history (and no new field for businesses that never touched the setting).
  */
-function withFridayHistory(defaults: EmployeeSettings, history: FridayPolicyChange[], effectiveFrom: LocalDate): EmployeeSettings {
-  const { fridayOvertimeHistory: _ignored, ...rest } = defaults;
+function withFridayHistory(
+  defaults: EmployeeSettings,
+  history: FridayPolicyChange[],
+  effectiveFrom: LocalDate,
+  creditHistory: WeeklyCreditChange[] = [],
+): EmployeeSettings {
+  const { fridayOvertimeHistory: _ignored, weeklyCreditHistory: _w, ...rest } = defaults;
   const chosen = defaults.fridayOvertime === 'all_overtime' ? 'all_overtime' : 'none';
   let next = history;
   if (businessFridayOn(history, '9999-12-31') !== chosen) next = [...history.filter((h) => h.from < effectiveFrom), { from: effectiveFrom, value: chosen }];
   const out: EmployeeSettings = { ...rest };
   if (defaults.fridayOvertime === 'inherit') delete out.fridayOvertime;
   if (next.length) out.fridayOvertimeHistory = next;
+  // Same rule for the weekly paid-absence credit (it changes overtime, so finalised months are protected).
+  if (out.absence) {
+    const a = { ...out.absence };
+    for (const k of Object.keys(a) as (keyof typeof a)[]) if (a[k] === 'inherit') delete a[k];
+    delete a.employmentStart;
+    out.absence = a;
+  }
+  const credit = out.absence?.weeklyCredit === 'paid_absence' ? 'paid_absence' : 'none';
+  let nextCredit = creditHistory;
+  if (businessWeeklyCreditOn(creditHistory, '9999-12-31') !== credit) nextCredit = [...creditHistory.filter((h) => h.from < effectiveFrom), { from: effectiveFrom, value: credit }];
+  if (nextCredit.length) out.weeklyCreditHistory = nextCredit;
   return out;
 }
 
-/** Employee settings never carry the business history. */
+/** Employee settings never carry the business histories. */
 function employeeSettingsOnly(s: EmployeeSettings): EmployeeSettings {
-  if (s.fridayOvertimeHistory === undefined) return s;
-  const { fridayOvertimeHistory: _ignored, ...rest } = s;
+  if (s.fridayOvertimeHistory === undefined && s.weeklyCreditHistory === undefined) return s;
+  const { fridayOvertimeHistory: _f, weeklyCreditHistory: _w, ...rest } = s;
   return rest;
+}
+
+/** Upsert / delete of one day entry plus its audit row. Callers that omit absence details keep the stored ones. */
+function dayEntryStatements(businessId: string, employeeId: string, date: LocalDate, before: DayEntry | null, entry: DayEntry | null, t: string): Statement[] {
+  const absence = entry?.absence === undefined ? (before?.absence ?? null) : cleanAbsence(entry.absence);
+  const empty = !entry || (!entry.status && !(entry.note && entry.note.trim()) && !absence);
+  const after: DayEntry | null = empty ? null : { ...entry!, date, absence };
+  const stmts: Statement[] = empty
+    ? [{ sql: `DELETE FROM day_entries WHERE employee_id = ? AND date = ? AND business_id = ?`, params: [employeeId, date, businessId] }]
+    : [
+        {
+          sql: `INSERT INTO day_entries (employee_id, business_id, date, status, note, absence_json, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(employee_id, date) DO UPDATE SET status = excluded.status, note = excluded.note, absence_json = excluded.absence_json, updated_at = excluded.updated_at`,
+          params: [employeeId, businessId, date, after!.status, after!.note?.trim() || null, absence ? JSON.stringify(absence) : null, t],
+        },
+      ];
+  stmts.push(audit('day_entry', empty ? 'delete' : before ? 'update' : 'create', { businessId, employeeId, entityId: date }, before, after));
+  return stmts;
+}
+
+/** Absence details without empty fields; null when nothing is left. */
+function cleanAbsence(a: AbsenceDetails | null | undefined): AbsenceDetails | null {
+  if (!a) return null;
+  const out: AbsenceDetails = {};
+  for (const [k, v] of Object.entries(a) as [keyof AbsenceDetails, unknown][]) {
+    if (v === null || v === undefined || v === '') continue;
+    (out as Record<string, unknown>)[k] = typeof v === 'string' ? v.trim() : v;
+  }
+  if (out.minutes !== undefined && (!Number.isInteger(out.minutes) || (out.minutes as number) <= 0)) throw new RepoError('משך היעדרות חלקית לא תקין');
+  if (out.payPercentOverride !== undefined && (!Number.isFinite(out.payPercentOverride) || (out.payPercentOverride as number) < 0 || (out.payPercentOverride as number) > 100))
+    throw new RepoError('שיעור תשלום חייב להיות בין 0 ל-100');
+  return Object.keys(out).length ? out : null;
 }
 
 function toBusiness(r: Row): Business {
@@ -232,7 +292,9 @@ export class Repository {
       ...before,
       name: patch.name !== undefined ? patch.name.trim() : before.name,
       identifier: patch.identifier !== undefined ? patch.identifier?.trim() || null : before.identifier,
-      defaults: patch.defaults ? withFridayHistory(patch.defaults, businessFridayHistory(before.defaults), await this.fridayChangeEffectiveFrom(id)) : before.defaults,
+      defaults: patch.defaults
+        ? withFridayHistory(patch.defaults, businessFridayHistory(before.defaults), await this.fridayChangeEffectiveFrom(id), businessWeeklyCreditHistory(before.defaults))
+        : before.defaults,
       updatedAt: now(),
     };
     if (!after.name) throw new RepoError('יש להזין שם עסק');
@@ -509,9 +571,9 @@ export class Repository {
   async applyAttendanceImport(
     businessId: string,
     employeeId: string,
-    changes: { add: ShiftInput[]; remove: ShiftInput[] },
-    meta: Record<string, unknown> & { undo?: boolean },
-  ): Promise<void> {
+    changes: { add: ShiftInput[]; remove: ShiftInput[]; dayTypes?: { before: DayEntry | null; after: DayEntry | null }[] },
+    meta: Record<string, unknown> & { undo?: boolean; redo?: boolean },
+  ): Promise<{ date: LocalDate; before: DayEntry | null; after: DayEntry | null }[]> {
     await this.getEmployee(businessId, employeeId);
     const t = now();
     const stmts: Statement[] = [];
@@ -534,24 +596,44 @@ export class Repository {
       });
       stmts.push(audit('shift', 'create', { businessId, employeeId, entityId: s.id }, null, shiftForAudit(s)));
     }
+    // Day categories approved by the user in the preview. A new import never replaces a category already stored
+    // (such dates are skipped); undo / redo restore the exact earlier state.
+    const daysWritten: { date: LocalDate; before: DayEntry | null; after: DayEntry | null }[] = [];
+    for (const d of changes.dayTypes ?? []) {
+      const date = (d.after ?? d.before)!.date;
+      const current = (await this.getDayEntries(businessId, employeeId, date, date))[0] ?? null;
+      const replay = meta.undo || meta.redo;
+      if (!replay && current?.status) continue;
+      const after: DayEntry | null = replay
+        ? d.after
+        : d.after && { ...d.after, note: current?.note ?? d.after.note ?? null, absence: current?.absence ?? d.after.absence ?? null };
+      stmts.push(...dayEntryStatements(businessId, employeeId, date, current, after, t));
+      daysWritten.push({ date, before: current, after });
+    }
     stmts.push({ sql: `UPDATE employees SET updated_at = ? WHERE id = ?`, params: [t, employeeId] });
     stmts.push(
       audit('attendance_import', meta.undo ? 'import_undo' : 'import', { businessId, employeeId, entityId: null }, null, {
         ...meta,
         shiftsAdded: changes.add.length,
         shiftsRemoved: changes.remove.length,
+        dayTypesSet: daysWritten.length,
       }),
     );
     await this.driver.batch(stmts);
+    return daysWritten;
   }
 
   // ---------------------------------------------------------------- day entries (status + note)
   async getDayEntries(businessId: string, employeeId: string, from: LocalDate, to: LocalDate): Promise<DayEntry[]> {
     const rows = await this.driver.select(
-      `SELECT date, status, note FROM day_entries WHERE business_id = ? AND employee_id = ? AND date >= ? AND date <= ? ORDER BY date`,
+      `SELECT date, status, note, absence_json FROM day_entries WHERE business_id = ? AND employee_id = ? AND date >= ? AND date <= ? ORDER BY date`,
       [businessId, employeeId, from, to],
     );
-    return rows.map((r) => ({ date: r.date as string, status: (r.status as DayStatusKind) ?? null, note: (r.note as string) ?? null }));
+    return rows.map((r) => {
+      const e: DayEntry = { date: r.date as string, status: (r.status as DayStatusKind) ?? null, note: (r.note as string) ?? null };
+      if (r.absence_json) e.absence = JSON.parse(r.absence_json as string) as AbsenceDetails;
+      return e;
+    });
   }
 
   async setDayEntry(businessId: string, employeeId: string, entry: DayEntry): Promise<void> {
@@ -559,21 +641,7 @@ export class Repository {
     const beforeRows = await this.getDayEntries(businessId, employeeId, entry.date, entry.date);
     const before = beforeRows[0] ?? null;
     const t = now();
-    const empty = !entry.status && !(entry.note && entry.note.trim());
-    const stmts: Statement[] = empty
-      ? [{ sql: `DELETE FROM day_entries WHERE employee_id = ? AND date = ? AND business_id = ?`, params: [employeeId, entry.date, businessId] }]
-      : [
-          {
-            sql: `INSERT INTO day_entries (employee_id, business_id, date, status, note, updated_at) VALUES (?, ?, ?, ?, ?, ?)
-                  ON CONFLICT(employee_id, date) DO UPDATE SET status = excluded.status, note = excluded.note, updated_at = excluded.updated_at`,
-            params: [employeeId, businessId, entry.date, entry.status, entry.note?.trim() || null, t],
-          },
-        ];
-    await this.driver.batch([
-      ...stmts,
-      { sql: `UPDATE employees SET updated_at = ? WHERE id = ?`, params: [t, employeeId] },
-      audit('day_entry', empty ? 'delete' : before ? 'update' : 'create', { businessId, employeeId, entityId: entry.date }, before, empty ? null : entry),
-    ]);
+    await this.driver.batch([...dayEntryStatements(businessId, employeeId, entry.date, before, entry, t), { sql: `UPDATE employees SET updated_at = ? WHERE id = ?`, params: [t, employeeId] }]);
   }
 
   // ---------------------------------------------------------------- custom holidays
@@ -685,5 +753,11 @@ export class Repository {
 
 /** Convert stored day entries to engine statuses. */
 export function toDayStatuses(entries: DayEntry[]): DayStatus[] {
-  return entries.filter((e) => e.status).map((e) => ({ date: e.date, status: e.status!, note: e.note ?? undefined }));
+  return entries
+    .filter((e) => e.status)
+    .map((e) => {
+      const d: DayStatus = { date: e.date, status: e.status!, note: e.note ?? undefined };
+      if (e.absence) d.absence = e.absence;
+      return d;
+    });
 }

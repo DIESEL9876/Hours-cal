@@ -1,5 +1,5 @@
 import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
-import { dedupeWarnings, formatDecimalHours, premiumMinutes, type BusinessSummary, type BusinessSummaryRow, type PeriodTotals } from '../../engine';
+import { dedupeWarnings, formatDays, formatDecimalHours, premiumMinutes, type AttendanceTotals, type BusinessSummary, type BusinessSummaryRow, type PeriodTotals } from '../../engine';
 import type { Business, MonthReview } from '../../data/repo';
 import { computeBusinessMonth, sha256Hex, snapshotOf, yearMonthKey } from '../../data/service';
 import { Crumbs, useApp } from '../App';
@@ -11,7 +11,7 @@ import { exportBusinessMonth } from '../../export/exporters';
 import { COPYRIGHT } from '../../licensing/CopyrightFooter';
 import { issuesText } from '../../export/tables';
 
-type SortKey = 'name' | 'days' | 'regular' | 'ot125' | 'ot150' | 'premium' | 'net';
+type SortKey = 'name' | 'days' | 'regular' | 'ot125' | 'ot150' | 'premium' | 'net' | 'aDays' | 'pDays' | 'aHours' | 'pHours' | 'vac' | 'sick' | 'hol' | 'elec';
 
 const sortValue = (r: BusinessSummaryRow, k: SortKey): number | string => {
   const t = r.totals;
@@ -30,8 +30,53 @@ const sortValue = (r: BusinessSummaryRow, k: SortKey): number | string => {
       return premiumMinutes(t.buckets).total;
     case 'net':
       return t.netMinutes;
+    case 'aDays':
+      return r.result.attendance.actualWorkedDays;
+    case 'pDays':
+      return r.result.attendance.paidDayHundredths;
+    case 'aHours':
+      return r.result.attendance.actualWorkedMinutes;
+    case 'pHours':
+      return r.result.attendance.payableEquivalentMinutes;
+    case 'vac':
+      return r.result.attendance.vacationDayHundredths;
+    case 'sick':
+      return r.result.attendance.sickDayHundredths;
+    case 'hol':
+      return r.result.attendance.holidayDayHundredths;
+    case 'elec':
+      return r.result.attendance.electionDayHundredths;
   }
 };
+
+/** Actual vs. paid attendance cells (version 1.1.7): hours HH:MM with decimal hours underneath, fractional days. */
+function AttendanceCells({ a, total = false }: { a: AttendanceTotals; total?: boolean }) {
+  const cls = 'num px-3 py-3 text-right';
+  const days = (v: number, testid: string, sub?: string) => (
+    <td className={cls} data-testid={total ? `grand-${testid}` : testid}>
+      {formatDays(v)}
+      {sub && <div className="num mt-0.5 text-[11px] font-normal leading-tight text-slate-500">{sub}</div>}
+    </td>
+  );
+  const hours = (v: number, testid: string) => (
+    <td className={cls} data-testid={total ? `grand-${testid}` : testid}>
+      {hm(v, '0:00')}
+      <DecimalHours minutes={v} testid={`dec-${testid}`} />
+    </td>
+  );
+  return (
+    <>
+      {days(a.actualWorkedDays * 100, 'actual-days')}
+      {days(a.paidDayHundredths, 'paid-days')}
+      {hours(a.actualWorkedMinutes, 'actual-hours')}
+      {hours(a.payableEquivalentMinutes, 'paid-hours')}
+      {days(a.vacationDayHundredths, 'vacation-days')}
+      {days(a.sickDayHundredths, 'sick-days', a.sickDayHundredths ? `משולם ${formatDays(a.sickPaidDayHundredths)}` : undefined)}
+      {days(a.holidayDayHundredths, 'holiday-days')}
+      {days(a.electionDayHundredths, 'election-days')}
+    </>
+  );
+}
 
 const REVIEW_LABEL: Record<MonthReview['status'], string> = { open: 'פתוח לעריכה', in_review: 'בבדיקה', final: 'נסגר לאחר בדיקה' };
 
@@ -47,6 +92,7 @@ export function SummaryScreen({ businessId }: { businessId: string }) {
   const [expanded, setExpanded] = useState<string | null>(null);
   const [ackReview, setAckReview] = useState(false);
   const [ackCompliance, setAckCompliance] = useState(false);
+  const [ackAbsence, setAckAbsence] = useState(false);
 
   const key = yearMonthKey(ym.year, ym.month);
   const load = useCallback(async () => {
@@ -57,6 +103,7 @@ export function SummaryScreen({ businessId }: { businessId: string }) {
     setCurrentHash(await sha256Hex(snapshotOf(s)));
     setAckReview(false);
     setAckCompliance(false);
+    setAckAbsence(false);
   }, [repo, businessId, ym, key]);
 
   useEffect(() => {
@@ -82,6 +129,7 @@ export function SummaryScreen({ businessId }: { businessId: string }) {
   const blocking = g.errorCount + g.unconfirmedBreaks;
   const periodReview = summary.rows.reduce((a, r) => a + r.result.warnings.filter((w) => w.severity === 'review').length, 0);
   const openReview = g.reviewCount - g.unconfirmedBreaks;
+  const absenceReview = summary.attendanceTotal.reviewDays;
   const changedSinceFinal = review.status === 'final' && review.snapshotHash !== null && review.snapshotHash !== currentHash;
   const title = `סיכום שעות עובדים - ${monthTitle(ym.year, ym.month)}`;
   const statusLine = `סטטוס חודש: ${REVIEW_LABEL[review.status]}${changedSinceFinal ? ' (הנתונים השתנו מאז הסגירה)' : ''}${blocking ? ` · ${issuesText(g)}` : ''}`;
@@ -104,7 +152,7 @@ export function SummaryScreen({ businessId }: { businessId: string }) {
   };
 
   const header = (k: SortKey, label: string, cls = '') => (
-    <th className={`px-3 py-2.5 font-medium ${cls}`}>
+    <th className={`whitespace-nowrap px-3 py-2.5 font-medium ${cls}`}>
       <button className={`inline-flex items-center gap-1 hover:text-ink ${sort.key === k ? 'text-ink' : ''}`} onClick={() => setSort((s) => ({ key: k, dir: s.key === k ? (-s.dir as 1 | -1) : k === 'name' ? 1 : -1 }))}>
         {label}
         {sort.key === k && <span className="text-[10px]">{sort.dir === 1 ? '▲' : '▼'}</span>}
@@ -158,12 +206,12 @@ export function SummaryScreen({ businessId }: { businessId: string }) {
         <div className="text-[10px]">{COPYRIGHT}</div>
       </div>
 
-      {(blocking > 0 || openReview > 0 || g.complianceCount > 0 || changedSinceFinal) && (
+      {(blocking > 0 || openReview > 0 || g.complianceCount > 0 || absenceReview > 0 || changedSinceFinal) && (
         <div className="mb-4 flex flex-wrap items-center gap-2 rounded-xl bg-amber-50 px-4 py-3 text-[13px] text-amber-900 ring-1 ring-amber-200">
           <IconAlert size={18} />
           {changedSinceFinal && <b>הנתונים השתנו לאחר סגירת החודש.</b>}
           <span>
-            הדוח כולל: {g.unconfirmedBreaks} הפסקות לא מאושרות · {g.incompleteEntries} רישומים חסרים · {g.errorCount - g.incompleteEntries} שגיאות · {openReview} סימונים לבדיקה · {g.complianceCount} אזהרות ציות.
+            הדוח כולל: {g.unconfirmedBreaks} הפסקות לא מאושרות · {g.incompleteEntries} רישומים חסרים · {g.errorCount - g.incompleteEntries} שגיאות · {openReview} סימונים לבדיקה · {g.complianceCount} אזהרות ציות{absenceReview > 0 ? ` · ${absenceReview} ימי היעדרות לבדיקה` : ''}.
           </span>
         </div>
       )}
@@ -178,11 +226,12 @@ export function SummaryScreen({ businessId }: { businessId: string }) {
             <span data-testid="decimal-legend" title={DECIMAL_HOURS_TITLE}>
               ערך עליון: ש:דד · <span className="text-slate-500">ערך תחתון: {DECIMAL_HOURS_LABEL}</span>
             </span>
+            <span>ימים: שברי יום (0.50 = חצי יום) · שעות משולמות = בפועל + היעדרות בתשלום, ללא תוספות 125%/150%</span>
             <span>לחיצה על שורה מציגה פירוט שבועי והתראות</span>
           </div>
         </div>
         <div className="overflow-x-auto">
-          <table className="w-full text-[14px]" data-testid="summary-table">
+          <table className="w-full min-w-max text-[14px] print:min-w-0 print:text-[9px]" data-testid="summary-table">
             <thead>
               <tr className="border-b border-line bg-slate-50/70 text-right text-[12px] text-ink-soft">
                 {header('name', 'עובד', 'ps-4')}
@@ -192,6 +241,14 @@ export function SummaryScreen({ businessId }: { businessId: string }) {
                 {header('ot150', 'נוספות 150%')}
                 {header('premium', 'מנוחה / חג (150·175·200)')}
                 {header('net', 'סה״כ שעות נטו')}
+                {header('aDays', 'ימים בפועל', 'border-s border-line')}
+                {header('pDays', 'ימים משולמים')}
+                {header('aHours', 'שעות בפועל')}
+                {header('pHours', 'שעות משולמות')}
+                {header('vac', 'ימי חופשה')}
+                {header('sick', 'ימי מחלה')}
+                {header('hol', 'ימי חג')}
+                {header('elec', 'ימי בחירות')}
                 {includePay && <th className="px-3 py-2.5 font-medium">הערכת עלות</th>}
                 <th className="px-3 py-2.5 font-medium">פריטים פתוחים</th>
               </tr>
@@ -203,13 +260,14 @@ export function SummaryScreen({ businessId }: { businessId: string }) {
                     name={r.name}
                     number={r.employeeNumber}
                     t={r.totals}
+                    a={r.result.attendance}
                     includePay={includePay}
                     expanded={expanded === r.employeeId}
                     onToggle={() => setExpanded(expanded === r.employeeId ? null : r.employeeId)}
                   />
                   {expanded === r.employeeId && (
                     <tr className="bg-slate-50/50">
-                      <td colSpan={includePay ? 9 : 8} className="px-6 py-4">
+                      <td colSpan={includePay ? 17 : 16} className="px-6 py-4">
                         <EmployeeDetail row={r} onOpen={() => go({ name: 'attendance', businessId, employeeId: r.employeeId })} />
                       </td>
                     </tr>
@@ -239,6 +297,7 @@ export function SummaryScreen({ businessId }: { businessId: string }) {
                   {hm(g.netMinutes, '0:00')}
                   <DecimalHours minutes={g.netMinutes} testid="dec-net" />
                 </td>
+                <AttendanceCells a={summary.attendanceTotal} total />
                 {includePay && <td className="num px-3 py-3 text-right">{shekels(g.payAgorot)}</td>}
                 <td className="px-3 py-3 text-[12px] font-normal">{issuesText(g) || '—'}</td>
               </tr>
@@ -264,6 +323,7 @@ export function SummaryScreen({ businessId }: { businessId: string }) {
               <Check ok={g.unconfirmedBreaks === 0} text={`הפסקות משוערות שלא אושרו: ${g.unconfirmedBreaks}`} />
               <Check ok={openReview === 0 || ackReview} warn text={`סימונים לבדיקה פתוחים (כולל ${periodReview} ברמת עובד): ${openReview}`} />
               <Check ok={g.complianceCount === 0 || ackCompliance} warn text={`אזהרות ציות: ${g.complianceCount}`} />
+              <Check ok={absenceReview === 0 || ackAbsence} warn text={`ימי היעדרות שהזכאות לתשלום בהם דורשת בדיקה: ${absenceReview}`} />
             </ul>
             <p className="mt-3 max-w-2xl text-[12px] leading-relaxed text-ink-soft">
               סגירת החודש שומרת תמונת מצב של החישוב וגיבוי. היא מאשרת שהנתונים נבדקו – ואינה קביעה שהדוח עומד בכל דרישות הדין. סיווגים הסכמיים, היתרים ועבודה בחג/מנוחה דורשים בדיקה מקצועית.
@@ -274,11 +334,12 @@ export function SummaryScreen({ businessId }: { businessId: string }) {
               <>
                 {openReview > 0 && <Checkbox checked={ackReview} onChange={setAckReview} label="בדקתי את הסימונים לבדיקה והם מטופלים" />}
                 {g.complianceCount > 0 && <Checkbox checked={ackCompliance} onChange={setAckCompliance} label="ראיתי את אזהרות הציות" />}
+                {absenceReview > 0 && <Checkbox checked={ackAbsence} onChange={setAckAbsence} label="בדקתי את ימי ההיעדרות המסומנים לבדיקה" />}
                 {review.status === 'open' && <Button onClick={() => setStatus('in_review')}>סימון כ"בבדיקה"</Button>}
                 <Button
                   variant="primary"
                   icon={<IconCheck size={16} />}
-                  disabled={blocking > 0 || (openReview > 0 && !ackReview) || (g.complianceCount > 0 && !ackCompliance)}
+                  disabled={blocking > 0 || (openReview > 0 && !ackReview) || (g.complianceCount > 0 && !ackCompliance) || (absenceReview > 0 && !ackAbsence)}
                   onClick={() => setStatus('final')}
                   data-testid="finalize"
                 >
@@ -310,9 +371,25 @@ function Check({ ok, text, warn }: { ok: boolean; text: string; warn?: boolean }
   );
 }
 
-function SummaryRow({ name, number, t, includePay, expanded, onToggle }: { name: string; number: string | null; t: PeriodTotals; includePay: boolean; expanded: boolean; onToggle: () => void }) {
+function SummaryRow({
+  name,
+  number,
+  t,
+  a,
+  includePay,
+  expanded,
+  onToggle,
+}: {
+  name: string;
+  number: string | null;
+  t: PeriodTotals;
+  a: AttendanceTotals;
+  includePay: boolean;
+  expanded: boolean;
+  onToggle: () => void;
+}) {
   const p = premiumMinutes(t.buckets);
-  const issues = issuesText(t);
+  const issues = [issuesText(t), a.reviewDays ? `${a.reviewDays} ימי היעדרות לבדיקה` : ''].filter(Boolean).join(', ');
   return (
     <tr className={`cursor-pointer border-b border-line/70 hover:bg-slate-50/60 ${expanded ? 'bg-slate-50/60' : ''}`} onClick={onToggle} data-testid="summary-row">
       <td className="px-4 py-3">
@@ -349,6 +426,7 @@ function SummaryRow({ name, number, t, includePay, expanded, onToggle }: { name:
         {hm(t.netMinutes, '0:00')}
         <DecimalHours minutes={t.netMinutes} testid="dec-net" />
       </td>
+      <AttendanceCells a={a} />
       {includePay && <td className="num px-3 py-3 text-right">{shekels(t.payAgorot)}</td>}
       <td className="px-3 py-3">{issues ? <Badge tone={t.errorCount || t.unconfirmedBreaks ? 'red' : 'amber'}>{issues}</Badge> : <Badge tone="green">תקין לבדיקה</Badge>}</td>
     </tr>

@@ -17,11 +17,15 @@ export function shekels(agorot: number | null): string {
   return `${sign}₪${s}.${String(abs % 100).padStart(2, '0')}`;
 }
 
+/** Day types ("סוג יום") in the order shown to the user (1.1.7). */
 export const STATUS_LABELS: Record<DayStatusKind, string> = {
-  not_worked: 'לא עבד',
+  work: 'עבודה רגילה',
   vacation: 'חופשה',
   sick: 'מחלה',
   holiday: 'חג',
+  election: 'בחירות',
+  unpaid: 'היעדרות ללא תשלום',
+  not_worked: 'יום ללא עבודה',
   reserve: 'מילואים',
   missing_record: 'רישום חסר',
 };

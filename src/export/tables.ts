@@ -4,15 +4,19 @@
  */
 import {
   dedupeWarnings,
+  formatDays,
   HEBREW_WEEKDAYS,
   premiumMinutes,
+  type AttendanceTotals,
   type BusinessSummary,
+  type DayAttendance,
   type EmployeePeriodResult,
   type PeriodTotals,
 } from '../engine';
 import { formatDateHe, STATUS_LABELS } from '../ui/format';
 
-export type Cell = { kind: 'text'; v: string } | { kind: 'dur'; v: number } | { kind: 'int'; v: number } | { kind: 'money'; v: number | null };
+/** 'days' holds HUNDREDTHS of a day (fractional day counts, summed exactly from the daily records). */
+export type Cell = { kind: 'text'; v: string } | { kind: 'dur'; v: number } | { kind: 'int'; v: number } | { kind: 'days'; v: number } | { kind: 'money'; v: number | null };
 
 export interface Table {
   title: string;
@@ -25,6 +29,26 @@ export interface Table {
 const T = (v: string): Cell => ({ kind: 'text', v });
 const D = (v: number): Cell => ({ kind: 'dur', v });
 const I = (v: number): Cell => ({ kind: 'int', v });
+const DY = (v: number): Cell => ({ kind: 'days', v });
+
+/** Daily actual-vs-paid columns (version 1.1.7), placed after the existing hour columns. */
+const DAY_ATTENDANCE_HEADERS = ['שעות בפועל', 'היעדרות בתשלום (שעות יום)', 'היעדרות – שווה ערך לתשלום', 'שעות משולמות', 'זיכוי לתקן השבועי', 'יום משולם', 'שיעור תשלום'];
+function dayAttendanceCells(a: DayAttendance): Cell[] {
+  const rate = a.category && a.paidAbsenceNominalMinutes > 0 ? (a.payPercent === null ? 'דורש בדיקה' : `${a.payPercent}%`) : '';
+  return [D(a.actualWorkedMinutes), D(a.paidAbsenceNominalMinutes), D(a.paidAbsenceEquivalentMinutes), D(a.payableEquivalentMinutes), D(a.weeklyCreditMinutes), DY(a.paidDayHundredths), T(rate)];
+}
+
+/** One-line category breakdown for a totals row. */
+export function categoryDaysText(a: AttendanceTotals): string {
+  const parts: string[] = [];
+  if (a.vacationDayHundredths) parts.push(`חופשה ${formatDays(a.vacationDayHundredths)}`);
+  if (a.sickDayHundredths) parts.push(`מחלה ${formatDays(a.sickDayHundredths)} (משולם ${formatDays(a.sickPaidDayHundredths)})`);
+  if (a.holidayDayHundredths) parts.push(`חג ${formatDays(a.holidayDayHundredths)}`);
+  if (a.electionDayHundredths) parts.push(`בחירות ${formatDays(a.electionDayHundredths)}`);
+  if (a.unpaidDayHundredths) parts.push(`ללא תשלום ${formatDays(a.unpaidDayHundredths)}`);
+  if (a.reviewDays) parts.push(`${a.reviewDays} ימים דורשים בדיקה`);
+  return parts.join(' · ');
+}
 
 export function employeeMonthTable(title: string, r: EmployeePeriodResult): Table {
   const headers = [
@@ -42,7 +66,8 @@ export function employeeMonthTable(title: string, r: EmployeePeriodResult): Tabl
     'מנוחה/חג 175%',
     'מנוחה/חג 200%',
     'לא מסווג',
-    'סטטוס',
+    ...DAY_ATTENDANCE_HEADERS,
+    'סוג יום',
     'הערות והתראות',
   ];
   const rows: Cell[][] = [];
@@ -55,6 +80,7 @@ export function employeeMonthTable(title: string, r: EmployeePeriodResult): Tabl
       .filter((w) => w.severity !== 'info')
       .map((w) => w.message);
     if (d.holidayName) notes.unshift(d.holidayName);
+    if (d.attendance.basis === 'review') notes.push(...d.attendance.reviewReasons);
     rows.push([
       T(formatDateHe(d.date)),
       T(HEBREW_WEEKDAYS[d.weekday]),
@@ -70,11 +96,13 @@ export function employeeMonthTable(title: string, r: EmployeePeriodResult): Tabl
       D(p.p175),
       D(p.p200),
       D(d.buckets.unclassified),
+      ...dayAttendanceCells(d.attendance),
       T(d.status ? STATUS_LABELS[d.status] : ''),
       T(notes.join(' | ')),
     ]);
   }
   const t = r.totals;
+  const a = r.attendance;
   const p = premiumMinutes(t.buckets);
   rows.push([
     T('סה״כ'),
@@ -91,7 +119,14 @@ export function employeeMonthTable(title: string, r: EmployeePeriodResult): Tabl
     D(p.p175),
     D(p.p200),
     D(t.buckets.unclassified),
+    D(a.actualWorkedMinutes),
+    D(a.paidAbsenceNominalMinutes),
+    D(a.paidAbsenceEquivalentMinutes),
+    D(a.payableEquivalentMinutes),
+    D(a.weeklyCreditMinutes),
+    DY(a.paidDayHundredths),
     T(''),
+    T(categoryDaysText(a)),
     T(issuesText(t)),
   ]);
   return { title, headers, rows, totalRow: rows.length - 1 };
@@ -105,6 +140,38 @@ export function issuesText(t: PeriodTotals): string {
   if (t.reviewCount - t.unconfirmedBreaks > 0) parts.push(`${t.reviewCount - t.unconfirmedBreaks} סימונים לבדיקה`);
   if (t.complianceCount) parts.push(`${t.complianceCount} אזהרות ציות`);
   return parts.join(', ');
+}
+
+/** Business-wide actual vs. paid columns (version 1.1.7). Totals are sums of the daily records. */
+export const BUSINESS_ATTENDANCE_HEADERS = [
+  'ימים בפועל',
+  'ימים משולמים',
+  'שעות בפועל',
+  'שעות משולמות',
+  'ימי חופשה',
+  'ימי מחלה',
+  'ימי מחלה – שווה ערך משולם',
+  'ניכוי ממכסת מחלה (הערכה)',
+  'ימי חג',
+  'ימי בחירות',
+  'ימי היעדרות ללא תשלום',
+  'ימים לבדיקה',
+];
+function businessAttendanceCells(a: AttendanceTotals): Cell[] {
+  return [
+    I(a.actualWorkedDays),
+    DY(a.paidDayHundredths),
+    D(a.actualWorkedMinutes),
+    D(a.payableEquivalentMinutes),
+    DY(a.vacationDayHundredths),
+    DY(a.sickDayHundredths),
+    DY(a.sickPaidDayHundredths),
+    DY(a.sickBalanceDeductionHundredths),
+    DY(a.holidayDayHundredths),
+    DY(a.electionDayHundredths),
+    DY(a.unpaidDayHundredths),
+    I(a.reviewDays),
+  ];
 }
 
 export function businessMonthTable(title: string, s: BusinessSummary, includePay: boolean): Table {
@@ -121,10 +188,11 @@ export function businessMonthTable(title: string, s: BusinessSummary, includePay
     'לא מסווג',
     'סה״כ שעות נטו',
     'סך הפסקות',
+    ...BUSINESS_ATTENDANCE_HEADERS,
     ...(includePay ? ['הערכת עלות (₪)'] : []),
     'פריטים פתוחים',
   ];
-  const row = (name: string, num: string, t: PeriodTotals): Cell[] => {
+  const row = (name: string, num: string, t: PeriodTotals, a: AttendanceTotals): Cell[] => {
     const p = premiumMinutes(t.buckets);
     return [
       T(name),
@@ -139,26 +207,31 @@ export function businessMonthTable(title: string, s: BusinessSummary, includePay
       D(t.buckets.unclassified),
       D(t.netMinutes),
       D(t.breakMinutes),
+      ...businessAttendanceCells(a),
       ...(includePay ? [{ kind: 'money', v: t.payAgorot } as Cell] : []),
       T(issuesText(t)),
     ];
   };
-  const rows = s.rows.map((r) => row(r.name, r.employeeNumber ?? '', r.totals));
-  rows.push(row('סה״כ לעסק', '', s.grandTotal));
+  const rows = s.rows.map((r) => row(r.name, r.employeeNumber ?? '', r.totals, r.result.attendance));
+  rows.push(row('סה״כ לעסק', '', s.grandTotal, s.attendanceTotal));
   return { title, headers, rows, totalRow: rows.length - 1 };
 }
 
 export function businessDetailTable(title: string, s: BusinessSummary): Table {
-  const base = employeeMonthTable('', s.rows[0]?.result ?? ({ days: [], totals: s.grandTotal } as unknown as EmployeePeriodResult));
+  const base = employeeMonthTable('', s.rows[0]?.result ?? ({ days: [], totals: s.grandTotal, attendance: s.attendanceTotal } as unknown as EmployeePeriodResult));
   const headers = ['עובד', ...base.headers];
   const rows: Cell[][] = [];
+  const net = base.headers.indexOf('שעות נטו');
+  const type = base.headers.indexOf('סוג יום');
+  const notes = base.headers.indexOf('הערות והתראות');
   for (const r of s.rows) {
     const t = employeeMonthTable('', r.result);
-    for (const row of t.rows.slice(0, -1)) {
-      const worked = row[6].kind === 'dur' && row[6].v > 0;
-      const hasNote = row[14].kind === 'text' && (row[14].v || (row[15].kind === 'text' && row[15].v));
-      if (worked || hasNote) rows.push([T(r.name), ...row]);
-    }
+    t.rows.slice(0, -1).forEach((row, i) => {
+      const worked = row[net].kind === 'dur' && row[net].v > 0;
+      const hasNote = (row[type].kind === 'text' && row[type].v) || (row[notes].kind === 'text' && row[notes].v);
+      const paid = r.result.days[i].attendance.payableEquivalentMinutes > 0;
+      if (worked || hasNote || paid) rows.push([T(r.name), ...row]);
+    });
   }
   return { title, headers, rows, totalRow: null };
 }

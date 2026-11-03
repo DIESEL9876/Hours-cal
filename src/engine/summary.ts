@@ -1,4 +1,5 @@
-import type { EmployeePeriodInput, EmployeePeriodResult, MinuteBuckets, PeriodTotals } from './types';
+import type { AttendanceTotals, EmployeePeriodInput, EmployeePeriodResult, MinuteBuckets, PeriodTotals } from './types';
+import { addAttendance, emptyAttendanceTotals } from './absence';
 import { addBuckets, calculateEmployeePeriod, emptyBuckets } from './engine';
 
 export interface BusinessSummaryRow {
@@ -12,6 +13,8 @@ export interface BusinessSummaryRow {
 export interface BusinessSummary {
   rows: BusinessSummaryRow[];
   grandTotal: PeriodTotals;
+  /** Actual vs. paid attendance, business total (sum of the employees' result.attendance). */
+  attendanceTotal: AttendanceTotals;
 }
 
 export function emptyTotals(): PeriodTotals {
@@ -60,8 +63,12 @@ export function calculateBusinessMonthlySummary(
     return { employeeId: e.employeeId, name: e.name, employeeNumber: e.employeeNumber, totals: result.totals, result };
   });
   const grandTotal = emptyTotals();
-  for (const r of rows) addTotals(grandTotal, r.totals);
-  return { rows, grandTotal };
+  const attendanceTotal = emptyAttendanceTotals();
+  for (const r of rows) {
+    addTotals(grandTotal, r.totals);
+    addAttendance(attendanceTotal, r.result.attendance);
+  }
+  return { rows, grandTotal, attendanceTotal };
 }
 
 /** Grouped presentation of special premiums (weekly rest + holiday). */

@@ -1,4 +1,17 @@
-import type { CompanyBreakPolicy, EmployeeSettings, FridayOvertimePolicy, FridayPolicyChange, LocalDate, SettingsVersion, Weekday } from './types';
+import type {
+  AbsenceSettings,
+  BusinessAbsenceDefaults,
+  CompanyBreakPolicy,
+  EmployeeSettings,
+  FridayOvertimePolicy,
+  FridayPolicyChange,
+  LocalDate,
+  ResolvedAbsenceSettings,
+  SettingsVersion,
+  WeeklyCreditChange,
+  WeeklyCreditPolicy,
+  Weekday,
+} from './types';
 import { DEFAULT_LOCATION } from './calendar';
 
 /** Statutory / extension-order constants for the general private-sector profile (see docs/LEGAL_RULES.md). */
@@ -118,6 +131,58 @@ export function fridayPolicyOn(settings: EmployeeSettings, date: LocalDate, busi
   const own = settings.fridayOvertime;
   if (own === 'all_overtime' || own === 'none') return own;
   return businessFridayOn(businessHistory, date);
+}
+
+// ---------------------------------------------------------------------------
+// Paid-absence settings (1.1.7) — business defaults with per-field employee override
+// ---------------------------------------------------------------------------
+
+/** Business weekly-credit history (absent everywhere = 'none' = unchanged earlier behaviour). */
+export function businessWeeklyCreditHistory(defaults: EmployeeSettings): WeeklyCreditChange[] {
+  if (defaults.weeklyCreditHistory?.length) return defaults.weeklyCreditHistory;
+  return defaults.absence?.weeklyCredit === 'paid_absence' ? [{ from: BEGINNING_OF_TIME, value: 'paid_absence' }] : [];
+}
+
+export function businessWeeklyCreditOn(history: WeeklyCreditChange[] | undefined, date: LocalDate): WeeklyCreditPolicy {
+  let value: WeeklyCreditPolicy = 'none';
+  let best = '';
+  for (const h of history ?? []) {
+    if (h.from <= date && h.from >= best) {
+      value = h.value;
+      best = h.from;
+    }
+  }
+  return value;
+}
+
+export function businessAbsenceDefaults(defaults: EmployeeSettings): BusinessAbsenceDefaults {
+  return { settings: defaults.absence ?? {}, weeklyCreditHistory: businessWeeklyCreditHistory(defaults) };
+}
+
+const pick = <T extends string>(own: T | 'inherit' | undefined, biz: T | 'inherit' | undefined, fallback: T): T =>
+  own && own !== 'inherit' ? own : biz && biz !== 'inherit' ? biz : fallback;
+
+/** Effective absence settings of an employee on a date. */
+export function resolveAbsenceSettings(settings: EmployeeSettings, date: LocalDate, business: BusinessAbsenceDefaults | undefined): ResolvedAbsenceSettings {
+  const own: AbsenceSettings = settings.absence ?? {};
+  const biz: AbsenceSettings = business?.settings ?? {};
+  const salaryExplicit = (own.salaryType && own.salaryType !== 'inherit') || (biz.salaryType && biz.salaryType !== 'inherit');
+  const salaryType = pick(own.salaryType, biz.salaryType, 'monthly');
+  const ref = pick(own.paidDayReference, biz.paidDayReference, 'auto');
+  const fixedFromOwn = own.paidDayReference && own.paidDayReference !== 'inherit';
+  const weeklyCredit = own.weeklyCredit && own.weeklyCredit !== 'inherit' ? own.weeklyCredit : businessWeeklyCreditOn(business?.weeklyCreditHistory, date);
+  return {
+    salaryType,
+    salaryTypeExplicit: !!salaryExplicit,
+    paidDayReference: ref === 'auto' ? (salaryType === 'monthly' ? 'schedule' : 'average_3m') : ref,
+    paidDayMinutes: (fixedFromOwn ? own.paidDayMinutes : biz.paidDayMinutes) ?? null,
+    vacation: pick(own.vacation, biz.vacation, 'statutory'),
+    sick: pick(own.sick, biz.sick, 'statutory'),
+    holiday: pick(own.holiday, biz.holiday, 'statutory'),
+    election: pick(own.election, biz.election, 'statutory'),
+    weeklyCredit,
+    employmentStart: own.employmentStart ?? null,
+  };
 }
 
 export function validateSettings(s: EmployeeSettings): string[] {

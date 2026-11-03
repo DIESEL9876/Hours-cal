@@ -3,7 +3,7 @@
  * (text or OCR) reports go through exactly the same logic.
  */
 import type { LocalDate } from '../engine';
-import type { Cell, ColumnMapping, Detection, Grid, GridSheet, PairMapping, ReadResult, Role, SourceRecord, SourceSegment } from './types';
+import type { CategoryHint, Cell, ColumnMapping, Detection, Grid, GridSheet, PairMapping, ReadResult, Role, SourceRecord, SourceSegment } from './types';
 import {
   cleanText,
   findPeriod,
@@ -291,6 +291,26 @@ function readSegment(inCell: Cell, outCell: Cell, order: DateOrder, flags: strin
 
 const CONTINUATION_NOTE = 'רישומי כניסה/יציאה נוספים משורות ללא תאריך צורפו לאותו יום';
 
+const HEB = '\u0590-\u05FF';
+const word = (w: string) => new RegExp(`(^|[^${HEB}])${w}([^${HEB}]|$)`);
+const CATEGORY_PATTERNS: [CategoryHint['kind'], RegExp][] = [
+  ['unpaid', /חל"?ת|חל״ת|ללא תשלום/],
+  ['vacation', /חופש/],
+  ['sick', /מחלה/],
+  ['election', /בחירות/],
+  ['holiday', word('ה?חג')],
+];
+
+/**
+ * Day category written in a report row ("חופשה", "מחלה", "חג", "בחירות", "חל״ת"). Returns null when none or when the
+ * row mentions more than one category (ambiguous). "ערב חג" is not a holiday.
+ */
+export function detectDayCategory(text: string): CategoryHint['kind'] | null {
+  const t = text.replace(/ערב\s+ה?חג/g, ' ');
+  const found = CATEGORY_PATTERNS.filter(([, re]) => re.test(t)).map(([k]) => k);
+  return found.length === 1 ? found[0] : null;
+}
+
 export interface ReadOptions {
   /** Year to use for dates printed without a year. */
   fallbackYear: number | null;
@@ -305,6 +325,7 @@ export function readRecords(grid: Grid, mapping: ColumnMapping, opts: ReadOption
   const fallbackYear = period ? Number(period.from.slice(0, 4)) : opts.fallbackYear;
 
   const records: SourceRecord[] = [];
+  const categoryHints: CategoryHint[] = [];
   const newRecord = (date: LocalDate, segments: SourceSegment[], flags: string[]): SourceRecord => ({
     sheet: mapping.sheet,
     row: -1,
@@ -335,6 +356,7 @@ export function readRecords(grid: Grid, mapping: ColumnMapping, opts: ReadOption
     const flags: string[] = [];
     const notes: string[] = [];
     const segments: SourceSegment[] = [];
+    const rowText = row.map((c) => cleanText(c.text)).filter(Boolean).join(' ');
     for (const p of mapping.pairs) {
       const seg = readSegment(cellAt(sheet, r, p.in), cellAt(sheet, r, p.out), order, flags, notes);
       if (seg) segments.push(seg);
@@ -384,6 +406,19 @@ export function readRecords(grid: Grid, mapping: ColumnMapping, opts: ReadOption
       if (ed) segments[segments.length - 1].endDate = ed;
     }
 
+    const employeeCell = mapping.employee !== null ? cleanText(cellAt(sheet, r, mapping.employee).text) : '';
+    const kind = detectDayCategory(employeeCell ? rowText.replace(employeeCell, ' ') : rowText);
+    if (kind) {
+      const hint: CategoryHint = {
+        date: date as LocalDate,
+        kind,
+        text: rowText.slice(0, 80),
+        employee: mapping.employee !== null ? employeeCell || null : meta?.employee ?? null,
+        employeeNo: mapping.employeeNo !== null ? cleanText(cellAt(sheet, r, mapping.employeeNo).text) || null : meta?.employeeNo ?? null,
+      };
+      if (!categoryHints.some((h) => h.date === hint.date && h.employee === hint.employee && h.employeeNo === hint.employeeNo)) categoryHints.push(hint);
+    }
+
     const realSegments = segments.filter((s) => s.start || s.end);
     if (!realSegments.length && breakMinutes === null && totalMinutes === null && !flags.length) {
       emptyDays++;
@@ -420,7 +455,7 @@ export function readRecords(grid: Grid, mapping: ColumnMapping, opts: ReadOption
     e.rows++;
     empMap.set(key, e);
   }
-  return { records, summaryRows, emptyDays, unreadableRows, period, employees: [...empMap.values()] };
+  return { records, categoryHints, summaryRows, emptyDays, unreadableRows, period, employees: [...empMap.values()] };
 }
 
 /** Builds a mapping from a manual role→column selection made in the mapping UI. */

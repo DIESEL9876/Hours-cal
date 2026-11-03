@@ -3,6 +3,8 @@ import {
   BEGINNING_OF_TIME,
   businessFridayHistory,
   businessFridayOn,
+  businessWeeklyCreditHistory,
+  businessWeeklyCreditOn,
   monthRange,
   resolveSettings,
   validateSettings,
@@ -242,8 +244,8 @@ function EmployeeForm({ business, employee, onClose, onSaved }: { business: Busi
   const [versions, setVersions] = useState<SettingsVersion[]>([]);
   // A new employee inherits the business Friday-overtime setting (all other defaults are copied as before).
   const [settings, setSettings] = useState<EmployeeSettings>(() => {
-    const { fridayOvertimeHistory: _h, ...copy } = business.defaults;
-    return { ...copy, fridayOvertime: 'inherit' };
+    const { fridayOvertimeHistory: _h, weeklyCreditHistory: _w, absence: _a, ...copy } = business.defaults;
+    return { ...copy, fridayOvertime: 'inherit', absence: {} }; // absence settings: all inherited from the business
   });
   const [dirtySettings, setDirtySettings] = useState(false);
   const firstOfMonth = `${ym.year}-${String(ym.month).padStart(2, '0')}-01`;
@@ -402,6 +404,7 @@ function EmployeeForm({ business, employee, onClose, onSaved }: { business: Busi
           )}
           <SettingsEditor
             businessFriday={businessFridayOn(businessFridayHistory(business.defaults), '9999-12-31')}
+            businessAbsence={{ ...business.defaults.absence, weeklyCredit: businessWeeklyCreditOn(businessWeeklyCreditHistory(business.defaults), '9999-12-31') }}
             value={settings}
             onChange={(s) => {
               setSettings(s);

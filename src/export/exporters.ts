@@ -1,7 +1,7 @@
 /**
  * XLSX / CSV generation and saving. Exports are generated locally; nothing is sent anywhere.
  */
-import { decimalHundredths, formatDecimalHours, formatHM, LAW, OFFICE_POLICY, type BusinessSummary, type EmployeePeriodResult } from '../engine';
+import { decimalHundredths, formatDays, formatDecimalHours, formatHM, LAW, OFFICE_POLICY, type BusinessSummary, type EmployeePeriodResult } from '../engine';
 import type { Business, Employee } from '../data/repo';
 import { isTauri } from '../data/tauriDriver';
 import { monthTitle } from '../ui/format';
@@ -22,6 +22,8 @@ function csvCell(c: Cell): string {
       return formatHM(c.v);
     case 'int':
       return String(c.v);
+    case 'days':
+      return formatDays(c.v);
     case 'money':
       return c.v === null ? '' : (c.v / 100).toFixed(2);
   }
@@ -84,6 +86,10 @@ async function tablesToXlsx(tables: Table[], meta: { title: string; subtitle: st
           d.alignment = { horizontal: 'center' };
         } else if (cell.kind === 'int') {
           c.value = cell.v;
+          c.alignment = { horizontal: 'center' };
+        } else if (cell.kind === 'days') {
+          c.value = cell.v / 100; // fractional days (hundredths, exactly as summed from the daily records)
+          c.numFmt = '0.00';
           c.alignment = { horizontal: 'center' };
         } else if (cell.kind === 'money') {
           c.value = cell.v === null ? null : cell.v / 100;

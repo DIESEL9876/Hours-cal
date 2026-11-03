@@ -2,7 +2,7 @@
 
 **Document date:** 2026-10-08
 **Applies to engine version:** 1.1.0 (`src/engine/`)
-**Change log:** 1.1.0 (2026-10-08) — office policy: five-day daily threshold 8:24 (rule 3.3).
+**Change log:** 1.1.0 (2026-10-08) — office policy: five-day daily threshold 8:24 (rule 3.3). 1.1.6 — Friday policy (4.7). 1.1.7 (2026-11-03) — actual vs. paid attendance, vacation, sickness, holidays, election days (section 10).
 **Status:** rules cross-checked against secondary sources only — see "Verification status" below.
 
 This file documents every rule the calculation engine applies, where it comes from, how confident we are,
@@ -169,4 +169,75 @@ Each employee either inherits it ("לפי הגדרת העסק") or overrides it 
 | 9.3 | A shift belongs to the workday on which it **starts** (overnight shifts stay with their start date). Monthly reports include the workdays dated in the month; weekly classification always uses the full Sunday–Saturday week across month boundaries. Weekly warnings are attached to the Saturday of the week. |
 | 9.4 | Settings are versioned by effective date. New versions never change earlier months; editing an existing version requires explicit authorisation and is audit-logged. Business defaults are copied (not linked) into new employees. |
 | 9.5 | Optional pay estimate: `minutes × percent × rate(agorot)` summed exactly as integers, divided and rounded half-up **once** per day / per total. Not a payroll calculation. |
-| 9.6 | Out of scope: income tax, National Insurance, pension, severance, sick/vacation/holiday pay, travel, absence entitlements. Absence statuses never create worked hours. |
+| 9.6 | Out of scope: income tax, National Insurance, pension, severance, travel. Since 1.1.7 paid absences are shown as **days and hour-equivalents** (section 10) — an estimate for review, never a payroll amount. Absence categories never create worked hours. |
+
+## 10. Actual vs. paid attendance, vacation, sickness, holidays, election days (since 1.1.7)
+
+### 10.1 Verification status for this section
+
+| Source | Attempted | Result |
+|---|---|---|
+| חוק דמי מחלה, התשל"ו-1976 (btl.gov.il / fs.knesset.gov.il) | 2026-11-03 | **Not accessible** (network policy). |
+| כל זכות — "דמי מחלה", "חישוב דמי מחלה לעובד במשכורת חודשית" | 2026-11-03 | **Not accessible** (host blocked). |
+| חוק חופשה שנתית, התשי"א-1951; צו ההרחבה (הסכם המסגרת 2000) — דמי חגים; חוק-יסוד: הכנסת §10; חוק הבחירות לכנסת §136; חוק הרשויות המקומיות (בחירות) §97ב | 2026-11-03 | Primary texts **not accessible**; consistent statements found via web search in secondary sources (workrights.co.il, bizportal, chambers of commerce, NATLEX summary of amendment 4 to the Sick Pay Law, law-firm summaries, a 2024 local-elections guide). |
+
+Nothing in this section is marked as verified against the official text. Every absence day whose entitlement
+depends on information the system does not hold is marked **"דורש בדיקה"** and must be acknowledged before the
+month can be closed. Figures are hour/day equivalents for payroll preparation — not payroll.
+
+### 10.2 Principles (all O — engine design)
+
+| # | Rule |
+|---|---|
+| 10.2.1 | The day type (`עבודה רגילה`, `חופשה`, `מחלה`, `חג`, `בחירות`, `היעדרות ללא תשלום`, `יום ללא עבודה`) is set **only by the user**. Calendar holidays and categories found in imported reports are shown as suggestions; nothing is saved until the user accepts. Replacing an existing category asks for confirmation. A blank date stays blank. |
+| 10.2.2 | **Actual** = net minutes physically worked (the existing engine result, unchanged). **Paid** = actual + paid-absence equivalent (absence nominal hours × payment rate). Premiums (125/150, rest/holiday) are never applied to absence time; absence minutes are never overtime. |
+| 10.2.3 | Nominal hours of an absent day = the employee's effective schedule for that date (contract daily hours, else the daily norm of the schedule — 8:24 office policy / 7:36 shortened day / six-day 8:00·7:00), or a fixed value, or the 3-month daily average (hourly/daily employees; at least 5 worked days required, else review). A day that is not a scheduled workday has no nominal hours. |
+| 10.2.4 | Partial-day absence: the user enters the absent hours; the day fraction = absent ÷ nominal (capped at one day). Work and a partial absence on the same date are both counted, without double counting. Work recorded on a date marked as a **full** absence is counted as work only and the date is flagged. |
+| 10.2.5 | Precision: integer minutes; equivalents rounded half-up once per day; day counts in hundredths per day; every total is the sum of the daily values (exact reconciliation between the day rows, the employee totals, the business summary and the exports). |
+| 10.2.6 | The new figures are kept outside the finalisation snapshot, so months finalised before 1.1.7 keep their hash. The only part that can change overtime — the weekly credit (10.7) — is off for existing businesses and a change applies only after the last finalised month. |
+| 10.2.7 | Additive migration (schema v2): one nullable column `day_entries.absence_json`. No existing value is changed or reinterpreted; a pre-migration backup is created automatically. |
+
+### 10.3 Vacation (חוק חופשה שנתית)
+
+| Rule | Status |
+|---|---|
+| Vacation days are paid in full: a monthly employee receives the regular wage; an hourly/daily employee the average daily wage (§10). Engine: 100% of the nominal hours; basis "rule" for monthly, "estimate" for hourly/daily (the daily average depends on payroll data). | S |
+| Manual override of the rate requires a reason; a rate below 100% is flagged. Profile "ידני" → every vacation day is flagged. | O |
+| The system does not manage the vacation balance (no fabricated entitlement); it shows days used only. | O |
+
+### 10.4 Sickness (חוק דמי מחלה)
+
+| Rule | Status |
+|---|---|
+| Rates per day of a continuous sickness period: day 1 — 0%, days 2–3 — 50%, from day 4 — 100% (amendment 4, in force 1.4.2011; one secondary source still quotes 37.5% — conflict noted, the engine uses 50%). | S |
+| The period is counted in calendar days and continues across months (look-back up to about 3 months is loaded). If its start lies before the loaded data, the day is flagged. | O |
+| Monthly employee: weekly rest days and holidays inside the period are part of it. Hourly/daily employee: sick pay only for scheduled workdays. The estimated balance deduction follows the same rule. | S |
+| Accrual 1.5 days per month up to 90 days; payment requires a balance and a medical certificate — **not managed**, so every sick day is flagged for review. | S |
+| More favourable arrangements: "100% from day 2" / "100% from day 1"; a manual override can never go below the statutory rate (clamped, with an explanation). | O |
+| Display: recorded sick days, paid day-equivalents (e.g. day 2 at 50% = 0.50) and hour-equivalents (8:24 × 50% = 4:12). Example from the specification reproduced in the tests. | O |
+
+### 10.5 Holidays (דמי חגים)
+
+| Rule | Status |
+|---|---|
+| Monthly employee: no deduction for a holiday on a scheduled workday (100%, "rule"). | S |
+| Hourly/daily employee (extension order, framework agreement 2000): after 3 months of employment; not for a holiday on Friday/Saturday in a five-day workplace (six-day: not Saturday); not if absent the day before/after without the employer's consent. Engine: missing employment start date → review; worked/authorised neighbouring workdays or a manual "זכאות אושרה" → 100% "estimate"; otherwise review. Payment basis (annual daily average) is not computed. | S |
+| A day marked "חג" is never counted as vacation. Work on a holiday is recorded as work with the existing holiday premiums; the additional holiday-pay question is flagged (case law on hourly workers who worked on a holiday). | S / I |
+| Frameworks: "לפי צו ההרחבה", "הסכמי – כל חג משולם", "ידני" (always review). | O |
+
+### 10.6 Election days
+
+| Rule | Status |
+|---|---|
+| Knesset elections (Basic Law: The Knesset §10; Elections Law §136) and local-authority elections (§97ב): a paid day of rest for an employee with at least 14 consecutive days with the employer; paid as a regular day, not deducted from vacation. Local elections require a manual confirmation that the day applies to the workplace's area. "Other election day" → manual review. | S |
+| Work on election day: actual hours are recorded as work; the statute sets no rate — **no automatic 200%** (a common practice only). Flagged. | S / I |
+
+### 10.7 Weekly credit toward the 42-hour week (I)
+
+No primary source or ruling settling whether paid absence counts toward the weekly 42 hours was found; one
+payroll-accounting source says it does. The engine therefore makes it a **business setting**
+("היעדרות בתשלום ותקן 42 השעות"): when on, the nominal hours of a paid absence day (rate > 0) are credited to the
+week's regular allowance, so later work in the same week (including Friday under the 1.1.6 Friday policy)
+reaches the weekly threshold earlier. Credited minutes are never classified as overtime and are never added to
+actual hours. Default: on for new businesses, **off** for existing ones (identical results to 1.1.6); a change
+applies from the month after the last finalised month.

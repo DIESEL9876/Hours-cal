@@ -105,6 +105,11 @@ export const MIGRATIONS: Migration[] = [
       `CREATE TABLE app_meta (key TEXT PRIMARY KEY, value TEXT)`,
     ],
   },
+  {
+    version: 2,
+    description: '1.1.7 paid absences: absence details per day (additive, nullable)',
+    statements: [`ALTER TABLE day_entries ADD COLUMN absence_json TEXT`],
+  },
 ];
 
 export const SCHEMA_VERSION = MIGRATIONS[MIGRATIONS.length - 1].version;

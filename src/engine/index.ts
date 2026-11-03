@@ -5,3 +5,4 @@ export * from './calendar';
 export * from './breaks';
 export * from './engine';
 export * from './summary';
+export * from './absence';
