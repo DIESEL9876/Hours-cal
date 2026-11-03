@@ -3,6 +3,7 @@
  * on disk), detects its real type from its content, and returns the format-independent Grid.
  */
 import { readPdf } from './pdf';
+import { IMAGE_EXTENSIONS, imageKind, readImage } from './image';
 import type { OcrProgress } from './ocr';
 import { gridFromXls, readCsv, readHtmlTable, readXlsx, decodeText, type RawXlsSheet } from './spreadsheet';
 import { ImportError, type Grid } from './types';
@@ -14,7 +15,8 @@ export { sameEmployee, nameKey } from './values';
 export type { OcrProgress } from './ocr';
 
 export const MAX_FILE_BYTES = 20 * 1024 * 1024;
-export const ACCEPT = '.xlsx,.xlsm,.xls,.csv,.txt,.pdf';
+export const ACCEPT = '.xlsx,.xlsm,.xls,.csv,.txt,.pdf,.jpg,.jpeg,.png,.webp,.heic,.heif';
+export { setImageBackend, imageKind, type ImageBackend } from './image';
 
 export interface ImportFile {
   name: string;
@@ -43,12 +45,13 @@ export async function readImportFile(file: ImportFile, opts: { onProgress?: (p: 
   if (!file.bytes.length) throw new ImportError('הקובץ ריק.');
   if (file.bytes.length > MAX_FILE_BYTES) throw new ImportError('הקובץ גדול מדי לייבוא (מעל 20MB).');
   const ext = file.name.toLowerCase().split('.').pop() ?? '';
+  if (imageKind(file.bytes) || IMAGE_EXTENSIONS.includes(ext)) return readImage(file.bytes, opts.onProgress);
   switch (kind(file)) {
     case 'pdf':
       return readPdf(file.bytes, opts.onProgress);
     case 'zip':
       if (ext === 'xlsx' || ext === 'xlsm' || ext === 'xls') return readXlsx(file.bytes);
-      throw new ImportError('סוג הקובץ אינו נתמך. ניתן לייבא Excel‏ (xlsx/xls), ‏CSV או PDF.');
+      throw new ImportError('סוג הקובץ אינו נתמך. ניתן לייבא Excel‏ (xlsx/xls), ‏CSV, ‏PDF או תמונה (JPG/PNG/WEBP).');
     case 'ole': {
       if (!opts.xlsReader) throw new ImportError('קבצי Excel ישנים (‎.xls) נתמכים בתוכנה המותקנת במחשב.');
       return gridFromXls(await opts.xlsReader(file.bytes));
@@ -57,6 +60,8 @@ export async function readImportFile(file: ImportFile, opts: { onProgress?: (p: 
       return readHtmlTable(decodeText(file.bytes));
     case 'text':
       if (['csv', 'txt', 'xls', 'tsv'].includes(ext)) return readCsv(file.bytes);
-      throw new ImportError('סוג הקובץ אינו נתמך. ניתן לייבא Excel‏ (xlsx/xls), ‏CSV או PDF.');
+      throw new ImportError('סוג הקובץ אינו נתמך. ניתן לייבא Excel‏ (xlsx/xls), ‏CSV, ‏PDF או תמונה (JPG/PNG/WEBP).');
   }
 }
+export { analyzeWorkbook, labelledValues, nameFromTitle, parseMonthText, type SheetEmployee, type WorkbookAnalysis } from './workbook';
+export { proposeEntries, retarget, summarize, blockingProblems, buildBulkChanges, planContext, type BulkEntry, type BulkAction, type BulkContext, type BulkSummary, type ExistingEmployeeRef } from './bulk';

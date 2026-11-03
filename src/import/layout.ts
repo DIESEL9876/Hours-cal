@@ -225,10 +225,11 @@ export function layoutTable(rawTokens: Token[], opts: { mergeGlyphs: boolean }):
     cols: HeaderColumn[];
     score: number;
     headerSet: Set<Token>;
-    bodies: { anchor: Token; tokens: Token[] }[];
+    bodies: { anchor: Token; tokens: Token[]; employee?: { name: string | null; number: string | null } }[];
     dateCol: HeaderColumn;
   }
   const layouts: PageLayout[] = [];
+  const footer: string[] = [];
   let lastEmployee: { name: string | null; number: string | null } = { name: null, number: null };
   const employees = new Map<number, { name: string | null; number: string | null }>();
   const labelOf = (c: HeaderColumn, rtlText: boolean) =>
@@ -274,19 +275,49 @@ export function layoutTable(rawTokens: Token[], opts: { mergeGlyphs: boolean }):
     const headerSet = new Set(headerLines.flat());
 
     // Free text above the header (titles, employee name, period).
-    const titleLines = above.filter((l) => !l.some((t) => headerSet.has(t))).map(lineText);
+    const titleTokens = above.filter((l) => !l.some((t) => headerSet.has(t)));
+    const titleLines = titleTokens.map(lineText);
     freeText.push(...titleLines);
-    const emp = employeeFromLines(titleLines);
+    let emp = employeeFromLines(titleLines);
+    // OCR reports often print "<number> <name>" right above the table. Used only when every word was read confidently.
+    const last = titleTokens[titleTokens.length - 1];
+    if (!emp.name && !emp.number && last && last.every((t) => t.conf === undefined || t.conf >= 80)) {
+      const m = /^(\d{3,9})\s+([\u0590-\u05FF][\u0590-\u05FF'"׳״\- ]{1,40})$/.exec(lineText(last)) ?? /^([\u0590-\u05FF][\u0590-\u05FF'"׳״\- ]{1,40}?)\s+(\d{3,9})$/.exec(lineText(last));
+      if (m) emp = /^\d/.test(m[1]) ? { number: m[1], name: cleanText(m[2]) } : { number: m[2], name: cleanText(m[1]) };
+    }
     if (emp.name || emp.number) lastEmployee = emp;
     employees.set(p, lastEmployee);
+
+    // Consolidated reports: a "סה״כ" line inside the table ends one employee's section; the next rows belong to the
+    // employee printed after it ("<number> <name>"). Section lines are not row content.
+    const sectionLines = toLines(pageTokens.filter((t) => !anchorSet.has(t) && cy(t) > cy(anchors[0]) && cy(t) < cy(anchors[anchors.length - 1])))
+      .filter((l) => /סה["״']?כ|total/i.test(lineText(l)) && !l.some((t) => DATE_TOKEN.test(t.text)));
+    const sectionTokens = new Set<Token>();
+    const sections = sectionLines.map((l, k) => {
+      l.forEach((t) => sectionTokens.add(t));
+      const y = Math.max(...l.map((t) => t.bottom));
+      const nextAnchor = anchors.find((a) => cy(a) > y);
+      const gap = nextAnchor ? toLines(pageTokens.filter((t) => !anchorSet.has(t) && t.top >= y && t.bottom <= nextAnchor.top)) : [];
+      gap.flat().forEach((t) => sectionTokens.add(t));
+      const named = gap.map(lineText).map((x) => /^(\d{3,9})\s+(.{2,40})$/.exec(x) ?? /^(.{2,40}?)\s+(\d{3,9})$/.exec(x)).find(Boolean);
+      const who = named ? (/^\d/.test(named[1]) ? { number: named[1], name: cleanText(named[2]) } : { number: named[2], name: cleanText(named[1]) }) : { name: `עובד ${k + 2} בדוח`, number: null };
+      return { y, who };
+    });
 
     // 3. Row bands.
     const bodies = anchors.map((a, i) => {
       const top = i === 0 ? cy(a) - half : (cy(anchors[i - 1]) + cy(a)) / 2;
       const bottom = i === anchors.length - 1 ? cy(a) + half : (cy(a) + cy(anchors[i + 1])) / 2;
-      return { anchor: a, tokens: pageTokens.filter((t) => t !== a && !anchorSet.has(t) && !headerSet.has(t) && cy(t) >= top && cy(t) < bottom) };
+      const section = sections.filter((s) => s.y < cy(a)).pop();
+      return {
+        anchor: a,
+        employee: section?.who,
+        tokens: pageTokens.filter((t) => t !== a && !anchorSet.has(t) && !headerSet.has(t) && !sectionTokens.has(t) && cy(t) >= top && cy(t) < bottom),
+      };
     });
     const dateCol: HeaderColumn = { x0: Math.min(...anchors.map((t) => t.x0)), x1: Math.max(...anchors.map((t) => t.x1)), parts: [] };
+    const tableBottom = cy(anchors[anchors.length - 1]) + half;
+    footer.push(...toLines(pageTokens.filter((t) => cy(t) >= tableBottom)).map(lineText));
     layouts.push({ page: p, cols, score, headerSet, bodies, dateCol });
   }
 
@@ -308,7 +339,7 @@ export function layoutTable(rawTokens: Token[], opts: { mergeGlyphs: boolean }):
     }
     return i;
   };
-  const pageRows: { page: number; anchor: Token; cells: Map<number, Token[]> }[] = [];
+  const pageRows: { page: number; anchor: Token; cells: Map<number, Token[]>; employee?: { name: string | null; number: string | null } }[] = [];
   for (const L of layouts) {
     const source = L.score >= 2 ? L : best;
     const dateCol = { ...L.dateCol };
@@ -347,7 +378,7 @@ export function layoutTable(rawTokens: Token[], opts: { mergeGlyphs: boolean }):
         const i = colKey.get(c)!;
         cells.set(i, [...(cells.get(i) ?? []), t]);
       }
-      pageRows.push({ page: L.page, anchor: b.anchor, cells });
+      pageRows.push({ page: L.page, anchor: b.anchor, cells, employee: b.employee });
     }
   }
 
@@ -366,11 +397,11 @@ export function layoutTable(rawTokens: Token[], opts: { mergeGlyphs: boolean }):
       cells[pos.get(i)!] = { text: sorted.map((t) => t.text).join(' '), conf: confs.length ? Math.min(...confs) : undefined, parts: sorted.map((t) => t.text) };
     }
     rows.push(cells);
-    const emp = employees.get(r.page);
+    const emp = r.employee ?? employees.get(r.page);
     rowMeta.push({ page: r.page, employee: emp?.name ?? null, employeeNo: emp?.number ?? null });
   }
 
-  return { sheet: { name: 'PDF', rows, rtl, rowMeta, headerText: freeText }, freeText };
+  return { sheet: { name: 'PDF', rows, rtl, rowMeta, headerText: freeText, footerText: footer }, freeText };
 }
 
 function headerTokensRtl(cols: HeaderColumn[]): boolean | null {

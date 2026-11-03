@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   BEGINNING_OF_TIME,
   businessFridayHistory,
@@ -16,7 +16,8 @@ import type { AuditEntry, Business, Employee } from '../../data/repo';
 import { computeBusinessMonth } from '../../data/service';
 import { Crumbs, useApp } from '../App';
 import { Badge, Button, Card, EmptyState, Field, Modal, PageHeader, Segmented, useUi } from '../components';
-import { IconCalendar, IconChart, IconClock, IconEdit, IconHistory, IconPlus, IconSearch, IconUsers } from '../icons';
+import { IconCalendar, IconChart, IconClock, IconEdit, IconHistory, IconPlus, IconSearch, IconUpload, IconUsers } from '../icons';
+import { BULK_ACCEPT, BulkImportWizard } from './BulkImport';
 import { MonthPicker } from '../MonthPicker';
 import { SettingsEditor } from '../SettingsEditor';
 import { formatDateHe, formatTimestamp, hm, monthTitle, scheduleLabel, weekdayName } from '../format';
@@ -41,6 +42,8 @@ export function EmployeesScreen({ businessId }: { businessId: string }) {
   const [showHolidays, setShowHolidays] = useState(false);
   const [showAudit, setShowAudit] = useState(false);
   const [showArchived, setShowArchived] = useState(false);
+  const [bulkFile, setBulkFile] = useState<File | null>(null);
+  const bulkInput = useRef<HTMLInputElement>(null);
 
   const load = useCallback(async () => {
     const [b, emps] = await Promise.all([repo.getBusiness(businessId), repo.listEmployees(businessId, showArchived)]);
@@ -100,6 +103,21 @@ export function EmployeesScreen({ businessId }: { businessId: string }) {
             <Button icon={<IconChart size={18} />} onClick={() => go({ name: 'summary', businessId })}>
               סיכום חודשי
             </Button>
+            <Button icon={<IconUpload size={18} />} onClick={() => bulkInput.current?.click()} data-testid="bulk-import-button">
+              ייבוא עובדים ודוחות מקובץ
+            </Button>
+            <input
+              ref={bulkInput}
+              type="file"
+              accept={BULK_ACCEPT}
+              className="hidden"
+              data-testid="bulk-import-file"
+              onChange={(e) => {
+                const f = e.target.files?.[0] ?? null;
+                e.target.value = '';
+                if (f) setBulkFile(f);
+              }}
+            />
             <Button variant="primary" icon={<IconPlus size={18} />} onClick={() => setEditing('new')}>
               הוספת עובד
             </Button>
@@ -213,6 +231,21 @@ export function EmployeesScreen({ businessId }: { businessId: string }) {
         )}
       </Card>
 
+      {bulkFile && (
+        <BulkImportWizard
+          business={business}
+          newBusiness={null}
+          file={bulkFile}
+          onClose={() => setBulkFile(null)}
+          onDone={(r, done, goTo) => {
+            setBulkFile(null);
+            if (done) setYm(done);
+            load().catch(() => undefined);
+            if (goTo === 'summary') go({ name: 'summary', businessId });
+            void r;
+          }}
+        />
+      )}
       {editing && (
         <EmployeeForm
           business={business}

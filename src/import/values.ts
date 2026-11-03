@@ -36,13 +36,16 @@ const EXACT: Record<Role, string[]> = {
   breakOut: ['יציאהלהפסקה', 'תחילתהפסקה', 'התחלתהפסקה', 'breakstart', 'breakout', 'startbreak'],
   breakIn: ['חזרהמהפסקה', 'סיוםהפסקה', 'כניסהמהפסקה', 'breakend', 'breakin', 'endbreak'],
   break: ['הפסקה', 'הפסקות', 'משךהפסקה', 'סהכהפסקה', 'סהכהפסקות', 'הפסקהמדווחת', 'סהכהפסקהמדווחת', 'הפסקהבדקות', 'break', 'breaks', 'breakduration', 'breakminutes', 'breaktime', 'unpaidbreak', 'lunch', 'lunchbreak'],
-  total: ['סהכ', 'סהכשעות', 'שעותבפועל', 'שעותעבודה', 'שעות', 'סהכשעותעבודה', 'שעותנטו', 'total', 'totalhours', 'hours', 'workedhours', 'hoursworked', 'nethours', 'totaltime', 'worktime'],
+  total: ['סהכ', 'סהכשעות', 'שעותבפועל', 'שעותעבודה', 'שעות', 'סהכשעותעבודה', 'שעותנטו', 'סיכום', 'total', 'totalhours', 'hours', 'workedhours', 'hoursworked', 'nethours', 'totaltime', 'worktime'],
   employee: ['שםעובד', 'שםהעובד', 'עובד', 'שם', 'employee', 'employeename', 'name', 'worker', 'fullname'],
   employeeNo: ['מספרעובד', 'מסעובד', 'מסהעובד', 'מספרהעובד', 'employeeid', 'employeenumber', 'empid', 'empno', 'employeeno', 'badge'],
+  range: ['טווחשעות', 'טווח', 'משעהעדשעה', 'שעותמעד', 'timerange', 'hoursrange', 'shifttime'],
+  remarks: ['הערות', 'הערה', 'notes', 'note', 'remarks', 'comments', 'comment'],
 };
 
 /** "Contains" rules, most specific first. English ones need whole multi-letter phrases. */
 const CONTAINS: [Role, string[]][] = [
+  ['range', ['טווחשעות']],
   ['breakOut', ['יציאהלהפסקה', 'תחילתהפסקה', 'breakstart', 'breakout']],
   ['breakIn', ['חזרהמהפסקה', 'סיוםהפסקה', 'breakend', 'breakin']],
   ['break', ['הפסקה', 'הפסקות', 'break']],
@@ -251,6 +254,44 @@ export function parseTimeCell(cell: Cell, order: DateOrder = 'dmy'): TimeValue |
   return { error: `לא ניתן לזהות שעה בערך "${t}"` };
 }
 
+/**
+ * A "time range" cell ("07:01 - 16:52", OCR parts ["16:52", "07:01"]). Returns the two times in READING order;
+ * which one is the entrance is decided by the caller from the hours column, never from the visual layout.
+ */
+export function parseRangeCell(cell: Cell): { a: string; b: string; flags: string[]; hours?: number } | { error: string } | null {
+  const text = cleanText(cell.parts && cell.parts.length ? cell.parts.join(' ') : cell.text);
+  if (!text || /^[-–—.]+$/.test(text)) return null;
+  let found = [...text.matchAll(/(?<![\d.:])(\d{1,2})([:.])(\d{2})(?![\d])/g)];
+  // OCR may join the neighbouring hours value ("8.25") to the range: two colon times + one decimal → the decimal is
+  // returned separately as the row's hours value, never used as a clock time.
+  let hours: number | undefined;
+  if (found.length === 3) {
+    const colon = found.filter((m) => m[2] === ':');
+    const dotted = found.filter((m) => m[2] === '.');
+    if (colon.length === 2 && dotted.length === 1 && Number(dotted[0][0]) <= 24) {
+      hours = Math.round(Number(dotted[0][0]) * 60);
+      found = colon;
+    }
+  }
+  if (found.length !== 2) return { error: `טווח השעות "${text}" לא נקרא במלואו` };
+  const flags: string[] = [];
+  const out: string[] = [];
+  for (const m of found) {
+    const h = Number(m[1]);
+    const min = Number(m[3]);
+    if (h > 23 || min > 59) return { error: `שעה לא תקינה בטווח "${text}"` };
+    if (m[2] === '.') flags.push(`בטווח השעות נקראה נקודה במקום נקודתיים ("${m[0]}") — יש לוודא את השעה`);
+    out.push(`${pad(h)}:${pad(min)}`);
+  }
+  return { a: out[0], b: out[1], flags, ...(hours !== undefined ? { hours } : {}) };
+}
+
+/** Minutes from clock time a to clock time b, crossing midnight when b ≤ a. */
+export function clockSpan(a: string, b: string): number {
+  const m = (t: string) => Number(t.slice(0, 2)) * 60 + Number(t.slice(3, 5));
+  return (m(b) - m(a) + 1440) % 1440 || 1440;
+}
+
 // ---------------------------------------------------------------------------------------------
 // Durations (breaks, totals)
 // ---------------------------------------------------------------------------------------------
@@ -279,12 +320,16 @@ export function parseBreakCell(cell: Cell): number | { error: string } | null {
   return { error: `משך הפסקה "${t}" אינו חד-משמעי` };
 }
 
-/** Worked-total cell → minutes (HH:MM or decimal hours). Used only for detection/notes. */
+/**
+ * Worked-total cell → minutes. "9:51" = 9 h 51 min; "9.85" (or a plain number) = DECIMAL hours = 9 h 51 min —
+ * never 9 h 85 min. A date-formatted serial is a duration only below 2 days. Used for cross-checks, never as attendance.
+ */
 export function parseTotalCell(cell: Cell): number | null {
   if (cell.serial !== undefined && cell.isDateLike && cell.serial < 2) {
     const p = serialToParts(cell.serial);
     return p ? Math.round(cell.serial * 1440) : null;
   }
+  if (cell.serial !== undefined && !cell.isDateLike) return cell.serial >= 0 && cell.serial <= 24 ? Math.round(cell.serial * 60) : null;
   const t = cleanText(cell.text).replace(/[*]/g, '');
   if (!t || /^[-–—.]+$/.test(t)) return null;
   const c = /^(\d{1,3}):(\d{2})$/.exec(t);

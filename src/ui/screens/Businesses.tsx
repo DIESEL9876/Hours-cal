@@ -1,15 +1,17 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { defaultEmployeeSettings, validateSettings, type EmployeeSettings } from '../../engine';
 import type { Business } from '../../data/repo';
 import { useApp } from '../App';
-import { Badge, Button, Card, EmptyState, Field, Modal, PageHeader, useUi } from '../components';
+import { Badge, Button, Card, EmptyState, Field, Modal, PageHeader, Segmented, useUi } from '../components';
+import { BULK_ACCEPT, BulkImportWizard, type NewBusinessDraft } from './BulkImport';
 import { IconBuilding, IconEdit, IconPlus, IconArrowBack } from '../icons';
 import { SettingsEditor } from '../SettingsEditor';
 import { formatTimestamp, scheduleLabel, weekdayName } from '../format';
 
 export function BusinessesScreen() {
-  const { repo, go, dataVersion } = useApp();
+  const { repo, go, dataVersion, setYm } = useApp();
   const ui = useUi();
+  const [bulk, setBulk] = useState<{ draft: NewBusinessDraft; file: File } | null>(null);
   const [list, setList] = useState<Business[] | null>(null);
   const [counts, setCounts] = useState<Map<string, number>>(new Map());
   const [showArchived, setShowArchived] = useState(false);
@@ -128,15 +130,46 @@ export function BusinessesScreen() {
             load();
             if (editing === 'new') go({ name: 'employees', businessId: b.id });
           }}
+          onImport={(draft, file) => {
+            setEditing(null);
+            setBulk({ draft, file });
+          }}
+        />
+      )}
+      {bulk && (
+        <BulkImportWizard
+          business={null}
+          newBusiness={bulk.draft}
+          file={bulk.file}
+          onClose={() => setBulk(null)}
+          onDone={(r, ym, goTo) => {
+            setBulk(null);
+            load();
+            if (!r.employees.length && !r.businessCreated) return;
+            if (ym) setYm(ym);
+            go(goTo === 'summary' ? { name: 'summary', businessId: r.businessId } : { name: 'employees', businessId: r.businessId });
+          }}
         />
       )}
     </div>
   );
 }
 
-function BusinessForm({ business, onClose, onSaved }: { business: Business | null; onClose: () => void; onSaved: (b: Business) => void }) {
+function BusinessForm({
+  business,
+  onClose,
+  onSaved,
+  onImport,
+}: {
+  business: Business | null;
+  onClose: () => void;
+  onSaved: (b: Business) => void;
+  onImport: (draft: NewBusinessDraft, file: File) => void;
+}) {
   const { repo } = useApp();
   const ui = useUi();
+  const [mode, setMode] = useState<'manual' | 'import'>('manual');
+  const fileInput = useRef<HTMLInputElement>(null);
   const [name, setName] = useState(business?.name ?? '');
   const [identifier, setIdentifier] = useState(business?.identifier ?? '');
   const [defaults, setDefaults] = useState<EmployeeSettings>(business?.defaults ?? defaultEmployeeSettings({ absence: { weeklyCredit: 'paid_absence' } }));
@@ -190,9 +223,37 @@ function BusinessForm({ business, onClose, onSaved }: { business: Business | nul
       title={business ? 'עריכת פרטי עסק' : 'הקמת עסק חדש'}
       footer={
         <>
-          <Button variant="primary" disabled={busy || errors.length > 0} onClick={save}>
-            {business ? 'שמירת שינויים' : 'הקמת העסק'}
-          </Button>
+          {mode === 'import' && !business ? (
+            <Button
+              variant="primary"
+              disabled={busy || errors.length > 0}
+              data-testid="business-import-choose"
+              onClick={async () => {
+                if (!name.trim()) return ui.toast('יש להזין שם עסק', 'error');
+                const dup = (await repo.listBusinesses(true)).some((b) => b.name === name.trim() && !b.archivedAt);
+                if (dup) return ui.toast('כבר קיים עסק בשם זה', 'error');
+                fileInput.current?.click();
+              }}
+            >
+              בחירת קובץ והמשך
+            </Button>
+          ) : (
+            <Button variant="primary" disabled={busy || errors.length > 0} onClick={save}>
+              {business ? 'שמירת שינויים' : 'הקמת העסק'}
+            </Button>
+          )}
+          <input
+            ref={fileInput}
+            type="file"
+            accept={BULK_ACCEPT}
+            className="hidden"
+            data-testid="business-import-file"
+            onChange={(e) => {
+              const f = e.target.files?.[0] ?? null;
+              e.target.value = '';
+              if (f) onImport({ name: name.trim(), identifier: identifier.trim() || null, defaults }, f);
+            }}
+          />
           <Button onClick={onClose}>ביטול</Button>
           {business && (
             <Button variant="ghost" className="ms-auto text-red-600 hover:bg-red-50 hover:text-red-700" onClick={archive}>
@@ -202,6 +263,19 @@ function BusinessForm({ business, onClose, onSaved }: { business: Business | nul
         </>
       }
     >
+      {!business && (
+        <div className="mb-4 flex flex-wrap items-center gap-3" data-testid="business-create-mode">
+          <Segmented<'manual' | 'import'>
+            value={mode}
+            onChange={setMode}
+            options={[
+              { value: 'manual', label: 'הקמת עסק ידנית' },
+              { value: 'import', label: 'הקמת עסק וייבוא עובדים מקובץ' },
+            ]}
+          />
+          {mode === 'import' && <span className="text-[12.5px] text-ink-soft">קובץ Excel עם גיליון לכל עובד. העסק והעובדים ייווצרו רק לאחר אישור התצוגה המקדימה.</span>}
+        </div>
+      )}
       <div className="grid grid-cols-2 gap-4">
         <Field label="שם העסק *">
           <input className="field-input" value={name} onChange={(e) => setName(e.target.value)} autoFocus data-testid="business-name-input" />

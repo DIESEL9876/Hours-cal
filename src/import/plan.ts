@@ -21,6 +21,11 @@ export interface PlanContext {
   existingDayStatus: Map<LocalDate, string>;
   /** Days with several entrance/exit pairs: the time between them is the break (no extra deduction). */
   gapIsBreak: boolean;
+  /**
+   * A break printed as 0:00 in the source: 'policy' = the employee's break policy applies (unconfirmed, as for a
+   * missing break); 'source' = 0 as recorded (treated like a typed, confirmed break). Undefined = 'source' (≤1.1.7).
+   */
+  zeroBreak?: 'policy' | 'source';
 }
 
 const inMonth = (date: LocalDate, ctx: PlanContext) => date.slice(0, 7) === `${ctx.year}-${String(ctx.month).padStart(2, '0')}`;
@@ -331,7 +336,7 @@ export function buildImportChanges(rows: PreviewRow[], ctx: PlanContext): Import
       // office chose to let the employee's break policy decide (then it stays unconfirmed, as usual).
       let breakMinutes: number | null = null;
       let breakConfirmed = false;
-      if (!multi && explicit !== null) {
+      if (!multi && explicit !== null && !(explicit === 0 && row.explicitBreak && ctx.zeroBreak === 'policy')) {
         breakMinutes = explicit;
         breakConfirmed = true;
       } else if (multi && (ctx.gapIsBreak || explicit !== null)) {

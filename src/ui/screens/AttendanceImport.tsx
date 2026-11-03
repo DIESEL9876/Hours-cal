@@ -12,6 +12,7 @@ import { Badge, Button, Checkbox, Field, Modal, Segmented, Select, useUi } from 
 import { IconAlert, IconCheck, IconInfo } from '../icons';
 import { formatDateHe, monthTitle, STATUS_LABELS as DAY_STATUS_LABELS } from '../format';
 import {
+  analyzeWorkbook,
   buildImportChanges,
   buildPreview,
   countPreview,
@@ -35,6 +36,7 @@ import {
   type PreviewRow,
   type ReadResult,
   type RowStatus,
+  type SheetEmployee,
 } from '../../import';
 
 export interface ImportResult {
@@ -114,6 +116,11 @@ export function AttendanceImportDialog({
   const [existing, setExisting] = useState<{ shifts: ShiftInput[]; status: Map<LocalDate, string>; kinds: Map<LocalDate, DayStatusKind> } | null>(null);
   /** Day categories found in the report are applied only when the user opts in (default: off). */
   const [applyTypes, setApplyTypes] = useState(false);
+  /** Multi-employee workbook (one sheet per employee): the sheet to import for this employee. */
+  const [sheetEmps, setSheetEmps] = useState<SheetEmployee[]>([]);
+  const [sheetKey, setSheetKey] = useState<string | null>(null);
+  /** A break printed as 0:00 in the source: the employee's break policy by default (see PlanContext.zeroBreak). */
+  const [zeroBreak, setZeroBreak] = useState<'policy' | 'source'>('policy');
   const [empChoice, setEmpChoice] = useState<string | null>(null);
   const [empConfirmed, setEmpConfirmed] = useState(false);
   const [gapIsBreak, setGapIsBreak] = useState(true);
@@ -148,6 +155,22 @@ export function AttendanceImportDialog({
             }
           }
         }
+        // Workbook with one report per employee: use the sheet of the selected employee.
+        if ((g.format === 'xlsx' || g.format === 'xls') && g.sheets.length > 1) {
+          const a = analyzeWorkbook(g, { fallbackYear: year });
+          if (a.employees.length > 1) {
+            setSheetEmps(a.employees);
+            const byNumber = a.employees.filter((x) => x.clockId && employee.employeeNumber && x.clockId === employee.employeeNumber.trim());
+            const byName = a.employees.filter((x) => x.name && sameEmployee({ name: x.name, number: null }, employee));
+            const pick = byNumber.length === 1 ? byNumber[0] : byName.length === 1 ? byName[0] : null;
+            if (pick) {
+              m = pick.mapping;
+              confirmed = true;
+              note = `נבחר הגיליון "${pick.sheetName}" (${a.employees.length} עובדים בקובץ).`;
+              setSheetKey(pick.key);
+            } else setSheetKey(null);
+          }
+        }
         setGrid(g);
         setDetection(det);
         setMapping(m);
@@ -165,7 +188,7 @@ export function AttendanceImportDialog({
     return () => {
       alive = false;
     };
-  }, [file, repo]);
+  }, [file, repo, employee, year]);
 
   // 2. Existing data of the target month (for conflicts) and month status.
   useEffect(() => {
@@ -204,7 +227,8 @@ export function AttendanceImportDialog({
     setEmpConfirmed(false);
   }, [read, employee]);
 
-  const chosen = employees.find((e) => empKey(e) === empChoice) ?? null;
+  const sheetEmp = sheetEmps.find((x) => x.key === sheetKey) ?? null;
+  const chosen = sheetEmp ? { name: sheetEmp.name, number: sheetEmp.clockId, rows: sheetEmp.records.length } : (employees.find((e) => empKey(e) === empChoice) ?? null);
   const nameMismatch = !!chosen && (chosen.name || chosen.number) && !sameEmployee(chosen, employee);
   const records = useMemo(() => (read && empChoice !== null ? read.records.filter((r) => empKey({ name: r.employee, number: r.employeeNo }) === empChoice) : []), [read, empChoice]);
   const otherEmployeeRows = read ? read.records.length - records.length : 0;
@@ -212,8 +236,8 @@ export function AttendanceImportDialog({
   const targetYm = `${target.year}-${String(target.month).padStart(2, '0')}`;
 
   const ctx: PlanContext | null = useMemo(
-    () => (existing ? { year: target.year, month: target.month, existingShifts: existing.shifts, existingDayStatus: existing.status, gapIsBreak } : null),
-    [existing, target, gapIsBreak],
+    () => (existing ? { year: target.year, month: target.month, existingShifts: existing.shifts, existingDayStatus: existing.status, gapIsBreak, zeroBreak } : null),
+    [existing, target, gapIsBreak, zeroBreak],
   );
 
   useEffect(() => {
@@ -230,7 +254,19 @@ export function AttendanceImportDialog({
   }, [read, existing, empChoice, target]);
   const applicableTypes = proposals.filter((p) => !p.existing);
   const hasMulti = rows.some((r) => r.segments.filter((s) => s.start || s.end).length > 1);
-  const empReady = !multiEmployee || empChoice !== null;
+  const hasZeroBreak = rows.some((r) => r.explicitBreak && r.breakText.trim() === '0');
+  // Source totals (summary row / footer): a validation reference only — never imported as attendance.
+  const sourceCheck = (() => {
+    if (!read || read.sourceTotalMinutes === null || sheetEmps.length > 1 && !sheetEmp) return null;
+    const rowsTotal = records.reduce((a, r) => a + (r.totalMinutes ?? 0), 0);
+    const withTotal = records.filter((r) => r.totalMinutes !== null).length;
+    // Decimal reports are compared exactly in decimal hours (sum of the printed row values vs. the printed total).
+    const decimals = records.every((r) => r.totalMinutes === null || r.totalHours !== undefined) && read.sourceTotalHours !== null;
+    const rowsHours = Math.round(records.reduce((a, r) => a + (r.totalHours ?? 0), 0) * 100) / 100;
+    const ok = !withTotal ? null : decimals ? Math.abs(rowsHours - read.sourceTotalHours!) < 0.005 * Math.max(1, withTotal) : Math.abs(rowsTotal - read.sourceTotalMinutes) <= Math.max(2, withTotal);
+    return { source: read.sourceTotalMinutes, sourceText: read.sourceTotalHours !== null ? read.sourceTotalHours.toFixed(2) : hmText(read.sourceTotalMinutes), rowsText: !withTotal ? null : decimals ? rowsHours.toFixed(2) : hmText(rowsTotal), ok };
+  })();
+  const empReady = (!multiEmployee || empChoice !== null) && (sheetEmps.length < 2 || sheetKey !== null);
   const empOk = empReady && (!nameMismatch || empConfirmed);
   const typesToApply = applyTypes ? applicableTypes.length : 0;
   const canApprove = phase === 'review' && !!mapping && mappingConfirmed && empOk && (counts.willImport > 0 || typesToApply > 0);
@@ -313,7 +349,11 @@ export function AttendanceImportDialog({
             {progress && (
               <div className="mt-3">
                 <div className="text-[13px] text-ink-soft">
-                  {progress.stage === 'render' ? 'מכין' : 'מזהה טקסט (OCR) בעמוד'} {progress.page} מתוך {progress.pages}
+                  {/\.(jpe?g|png|webp|heic|heif)$/i.test(file.name)
+                    ? progress.stage === 'render'
+                      ? 'מעבד את התמונה'
+                      : `מזהה טקסט בתמונה (OCR)${progress.pages > 1 && progress.page > 1 ? ` — ניסיון כיוון ${progress.page}` : ''}`
+                    : `${progress.stage === 'render' ? 'מכין' : 'מזהה טקסט (OCR) בעמוד'} ${progress.page} מתוך ${progress.pages}`}
                 </div>
                 <div className="mx-auto mt-2 h-1.5 w-64 overflow-hidden rounded-full bg-slate-200">
                   <div className="h-full bg-brand transition-all" style={{ width: `${Math.round(((progress.page - 1 + progress.progress) / progress.pages) * 100)}%` }} />
@@ -395,7 +435,7 @@ export function AttendanceImportDialog({
           <span>
             קובץ: <span className="text-ink">{file.name}</span>
           </span>
-          {grid && <span>סוג: {{ xlsx: 'Excel', xls: 'Excel', csv: 'CSV', pdf: 'PDF', 'pdf-ocr': 'PDF סרוק (OCR)' }[grid.format]}</span>}
+          {grid && <span>סוג: {{ xlsx: 'Excel', xls: 'Excel', csv: 'CSV', pdf: 'PDF', 'pdf-ocr': 'PDF סרוק (OCR)', 'image-ocr': 'תמונה (OCR)' }[grid.format]}</span>}
           {chosen?.name && (
             <span>
               עובד בקובץ: <span className="text-ink">{chosen.name}</span>
@@ -445,10 +485,37 @@ export function AttendanceImportDialog({
         {mapping && !mappingOpen && (
           <div className="text-[12.5px] text-ink-soft">
             עמודות שזוהו: תאריך ← "{labels[mapping.date]}", {mapping.pairs.map((p, i) => `כניסה${mapping.pairs.length > 1 ? ` ${i + 1}` : ''} ← "${p.in !== null ? labels[p.in] : '—'}", יציאה ← "${p.out !== null ? labels[p.out] : '—'}"`).join(', ')}
-            {mapping.break !== null ? `, הפסקה ← "${labels[mapping.break]}"` : ''}.{' '}
+            {mapping.range != null ? `טווח שעות ← "${labels[mapping.range]}" (סדר הכניסה והיציאה נקבע לפי סה״כ השעות בכל שורה), ` : ''}
+            {mapping.total !== null ? `סה״כ שעות ← "${labels[mapping.total]}" (לבדיקה בלבד), ` : ''}
+            {mapping.break !== null ? `הפסקה ← "${labels[mapping.break]}"` : ''}.{' '}
             <button className="text-brand hover:underline" onClick={() => setMappingOpen(true)} data-testid="map-edit">
               שינוי מיפוי
             </button>
+          </div>
+        )}
+
+        {/* Workbook: one sheet per employee */}
+        {sheetEmps.length > 1 && (
+          <div className="rounded-xl border border-violet-200 bg-violet-50/40 p-4" data-testid="import-sheet">
+            <div className="mb-2 text-[14px] font-medium text-ink">
+              בקובץ {sheetEmps.length} גיליונות של עובדים. יש לבחור את הגיליון של {employee.fullName}:
+            </div>
+            <Select<string>
+              value={sheetKey ?? ''}
+              onChange={(v) => {
+                const x = sheetEmps.find((e) => e.key === v) ?? null;
+                setSheetKey(x?.key ?? null);
+                if (x) {
+                  setMapping(x.mapping);
+                  setMappingConfirmed(true);
+                  setMappingOpen(false);
+                }
+              }}
+              options={[{ value: '', label: '— בחירת גיליון —' }, ...sheetEmps.map((e) => ({ value: e.key, label: `${e.name ?? e.sheetName}${e.clockId ? ` (${e.clockId})` : ''} — ${e.detected.days} ימים` }))]}
+              className="!w-auto"
+              data-testid="import-sheet-select"
+            />
+            <p className="mt-2 text-[12px] text-ink-soft">ליצירת כל העובדים מהקובץ בבת אחת: "ייבוא עובדים ודוחות מקובץ" ברשימת העובדים.</p>
           </div>
         )}
 
@@ -494,6 +561,34 @@ export function AttendanceImportDialog({
           </Banner>
         )}
         {finalMonth && <Banner tone="warn">דוח החודש סומן כסופי. קליטה תשנה את נתוני החודש.</Banner>}
+
+        {sourceCheck && (
+          <Banner tone={sourceCheck.ok === false ? 'warn' : 'info'}>
+            <span data-testid="import-source-total">
+              סה״כ שעות בדוח המקור: <b className="num">{sourceCheck.sourceText}</b> ({hmText(sourceCheck.source)})
+              {sourceCheck.rowsText !== null && (
+                <>
+                  {' '}
+                  · סכום שעות השורות שזוהו: <b className="num">{sourceCheck.rowsText}</b> — {sourceCheck.ok ? 'תואם' : 'אינו תואם, ייתכן ששורות לא זוהו — יש לבדוק'}
+                </>
+              )}
+              . הסה״כ משמש לבדיקה בלבד; Hours-Cal מחשבת מחדש מהרישומים היומיים.
+            </span>
+          </Banner>
+        )}
+        {hasZeroBreak && (
+          <div className="flex flex-wrap items-center gap-3 text-[13px]" data-testid="import-zero-break">
+            <span>הפסקה 0:00 בדוח המקור:</span>
+            <Segmented<'policy' | 'source'>
+              value={zeroBreak}
+              onChange={setZeroBreak}
+              options={[
+                { value: 'policy', label: 'לפי מדיניות ההפסקות של העובד (טעון אישור)' },
+                { value: 'source', label: 'ללא הפסקה, כפי שבדוח' },
+              ]}
+            />
+          </div>
+        )}
 
         {/* Counts */}
         <div className="flex flex-wrap gap-2 text-[12.5px]" data-testid="import-counts">
@@ -576,7 +671,9 @@ export function AttendanceImportDialog({
   );
 }
 
-function Banner({ tone, children }: { tone: 'info' | 'warn'; children: React.ReactNode }) {
+const hmText = (m: number) => `${Math.floor(m / 60)}:${String(m % 60).padStart(2, '0')}`;
+
+export function Banner({ tone, children }: { tone: 'info' | 'warn'; children: React.ReactNode }) {
   return (
     <div className={`flex items-start gap-2.5 rounded-lg p-3 text-[13px] ring-1 ${tone === 'warn' ? 'bg-amber-50 text-amber-900 ring-amber-200' : 'bg-sky-50 text-sky-900 ring-sky-200'}`}>
       {tone === 'warn' ? <IconAlert size={16} className="mt-0.5 shrink-0" /> : <IconInfo size={16} className="mt-0.5 shrink-0" />}
@@ -585,7 +682,7 @@ function Banner({ tone, children }: { tone: 'info' | 'warn'; children: React.Rea
   );
 }
 
-function PreviewLine({ row: r, onChange }: { row: PreviewRow; onChange: (p: Partial<PreviewRow>) => void }) {
+export function PreviewLine({ row: r, onChange }: { row: PreviewRow; onChange: (p: Partial<PreviewRow>) => void }) {
   const includable = isIncludable(r);
   const segs = r.segments.length ? r.segments : [{ start: '', end: '' }];
   const setSeg = (i: number, key: 'start' | 'end', v: string) => onChange({ segments: segs.map((s, k) => (k === i ? { ...s, [key]: v } : s)) });

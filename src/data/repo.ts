@@ -48,6 +48,25 @@ export interface Employee {
   archivedAt: string | null;
 }
 
+export interface BulkImportInput {
+  business: { id: string } | { create: { name: string; identifier?: string | null; defaults: EmployeeSettings } };
+  employees: {
+    /** Caller's reference (e.g. the worksheet key). */
+    ref: string;
+    target: { existingId: string } | { create: { fullName: string; employeeNumber?: string | null; notes?: string | null; settings: EmployeeSettings } };
+    add: ShiftInput[];
+    /** Existing shifts replaced by explicit user choice (existing employees only). */
+    remove: ShiftInput[];
+  }[];
+  meta: Record<string, unknown>;
+}
+
+export interface BulkImportResult {
+  businessId: string;
+  businessCreated: boolean;
+  employees: { ref: string; employeeId: string; created: boolean; fullName: string; added: ShiftInput[]; removed: ShiftInput[] }[];
+}
+
 export interface ShiftRecord extends ShiftInput {
   employeeId: string;
   businessId: string;
@@ -164,6 +183,14 @@ function dayEntryStatements(businessId: string, employeeId: string, date: LocalD
       ];
   stmts.push(audit('day_entry', empty ? 'delete' : before ? 'update' : 'create', { businessId, employeeId, entityId: date }, before, after));
   return stmts;
+}
+
+/** Same validation as applyAttendanceImport for one imported shift. */
+function validateImportedShift(s: ShiftInput) {
+  if (!s.startAt && !s.endAt) throw new RepoError('משמרת ריקה אינה נשמרת');
+  if (s.startAt && s.endAt && s.endAt <= s.startAt) throw new RepoError(`${s.workDate}: שעת היציאה חייבת להיות מאוחרת משעת הכניסה`);
+  if (s.startAt && s.startAt.slice(0, 10) !== s.workDate) throw new RepoError(`${s.workDate}: תאריך המשמרת אינו תואם`);
+  if (s.breakMinutes !== null && (!Number.isInteger(s.breakMinutes) || s.breakMinutes < 0)) throw new RepoError('משך הפסקה לא תקין');
 }
 
 /** Absence details without empty fields; null when nothing is left. */
@@ -621,6 +648,149 @@ export class Repository {
     );
     await this.driver.batch(stmts);
     return daysWritten;
+  }
+
+  /**
+   * Bulk import (1.1.8): optionally creates the business, creates the approved new employees, and writes every
+   * approved shift — all in ONE atomic batch with audit rows. Any error before or during the batch leaves the database
+   * unchanged. Existing employees' settings are never modified; existing shifts are removed only when the user chose
+   * "replace" for that date in the preview.
+   */
+  async bulkImport(input: BulkImportInput): Promise<BulkImportResult> {
+    const t = now();
+    const stmts: Statement[] = [];
+    let businessId: string;
+    let businessCreated = false;
+    if ('create' in input.business) {
+      const c = input.business.create;
+      const name = c.name.trim();
+      if (!name) throw new RepoError('יש להזין שם עסק');
+      const errs = validateSettings(c.defaults);
+      if (errs.length) throw new RepoError(errs.join('\n'));
+      const dup = await this.driver.select(`SELECT id FROM businesses WHERE name = ? AND archived_at IS NULL`, [name]);
+      if (dup.length) throw new RepoError('כבר קיים עסק בשם זה');
+      const defaults = withFridayHistory(c.defaults, [], BEGINNING_OF_TIME);
+      const biz: Business = { id: uuid(), name, identifier: c.identifier?.trim() || null, defaults, createdAt: t, updatedAt: t, archivedAt: null };
+      stmts.push(
+        { sql: `INSERT INTO businesses (id, name, identifier, defaults_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)`, params: [biz.id, biz.name, biz.identifier, JSON.stringify(biz.defaults), t, t] },
+        audit('business', 'create', { businessId: biz.id, entityId: biz.id }, null, biz),
+      );
+      businessId = biz.id;
+      businessCreated = true;
+    } else {
+      businessId = (await this.getBusiness(input.business.id)).id;
+    }
+
+    const existingNumbers = businessCreated
+      ? new Map<string, string>()
+      : new Map((await this.driver.select<{ id: string; employee_number: string | null }>(`SELECT id, employee_number FROM employees WHERE business_id = ? AND archived_at IS NULL`, [businessId])).filter((r) => r.employee_number).map((r) => [String(r.employee_number), String(r.id)]));
+    const usedNumbers = new Set<string>();
+    const shiftIds = new Set<string>();
+    const out: BulkImportResult['employees'] = [];
+    let totalAdded = 0;
+    for (const item of input.employees) {
+      let employeeId: string;
+      let created = false;
+      let fullName: string;
+      if ('create' in item.target) {
+        const c = item.target.create;
+        fullName = c.fullName.trim();
+        if (!fullName) throw new RepoError('יש להזין שם לכל עובד חדש');
+        const num = c.employeeNumber?.trim() || null;
+        if (num && (existingNumbers.has(num) || usedNumbers.has(num))) throw new RepoError(`מספר העובד ${num} כבר קיים בעסק (${fullName})`);
+        if (num) usedNumbers.add(num);
+        const settings = employeeSettingsOnly(c.settings);
+        const errs = validateSettings(settings);
+        if (errs.length) throw new RepoError(errs.join('\n'));
+        const emp: Employee = { id: uuid(), businessId, fullName, employeeNumber: num, notes: c.notes?.trim() || null, createdAt: t, updatedAt: t, archivedAt: null };
+        stmts.push(
+          { sql: `INSERT INTO employees (id, business_id, full_name, employee_number, notes, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)`, params: [emp.id, businessId, emp.fullName, emp.employeeNumber, emp.notes, t, t] },
+          { sql: `INSERT INTO employee_settings (id, employee_id, effective_from, settings_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)`, params: [uuid(), emp.id, BEGINNING_OF_TIME, JSON.stringify(settings), t, t] },
+          audit('employee', 'create', { businessId, employeeId: emp.id, entityId: emp.id }, null, { ...emp, settings, source: 'bulk_import' }),
+        );
+        employeeId = emp.id;
+        created = true;
+      } else {
+        if (businessCreated) throw new RepoError('לא ניתן לשייך לעובד קיים בעסק חדש');
+        const emp = await this.getEmployee(businessId, item.target.existingId);
+        employeeId = emp.id;
+        fullName = emp.fullName;
+      }
+      for (const r of item.remove) {
+        if (created) throw new RepoError('אין משמרות להחלפה לעובד חדש');
+        const before = await this.getShift(businessId, r.id);
+        if (!before || before.employeeId !== employeeId) throw new RepoError('משמרת להחלפה לא נמצאה');
+        stmts.push({ sql: `DELETE FROM shifts WHERE id = ? AND business_id = ?`, params: [r.id, businessId] }, audit('shift', 'delete', { businessId, employeeId, entityId: r.id }, shiftForAudit(before), null));
+      }
+      const removing = new Set(item.remove.map((r) => r.id));
+      for (const sh of item.add) {
+        validateImportedShift(sh);
+        if (shiftIds.has(sh.id) || (!removing.has(sh.id) && (await this.getShift(businessId, sh.id)))) throw new RepoError('מזהה משמרת כפול');
+        shiftIds.add(sh.id);
+        stmts.push(
+          {
+            sql: `INSERT INTO shifts (work_date, start_at, end_at, break_minutes, break_start, break_confirmed, break_paid, reviewed, note, created_at, updated_at, id, business_id, employee_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            params: [sh.workDate, sh.startAt, sh.endAt, sh.breakMinutes, sh.breakStart, b(sh.breakConfirmed), b(sh.breakPaid), b(sh.reviewed), sh.note ?? null, t, t, sh.id, businessId, employeeId],
+          },
+          audit('shift', 'create', { businessId, employeeId, entityId: sh.id }, null, shiftForAudit(sh)),
+        );
+      }
+      totalAdded += item.add.length;
+      if (item.add.length || item.remove.length) stmts.push({ sql: `UPDATE employees SET updated_at = ? WHERE id = ?`, params: [t, employeeId] });
+      out.push({ ref: item.ref, employeeId, created, fullName, added: item.add, removed: item.remove });
+    }
+    stmts.push(
+      audit('attendance_import', 'bulk_import', { businessId, entityId: null }, null, {
+        ...input.meta,
+        businessCreated,
+        employeesCreated: out.filter((e) => e.created).length,
+        employeesUpdated: out.filter((e) => !e.created).length,
+        shiftsAdded: totalAdded,
+      }),
+    );
+    await this.driver.batch(stmts);
+    return { businessId, businessCreated, employees: out };
+  }
+
+  /**
+   * Reverts a bulk import atomically: removes the imported shifts, restores replaced ones and removes the employees the
+   * import created (only when nothing else was recorded for them since). A business created by the import is kept.
+   */
+  async undoBulkImport(result: BulkImportResult): Promise<void> {
+    const t = now();
+    const stmts: Statement[] = [];
+    const businessId = result.businessId;
+    for (const e of result.employees) {
+      if (e.created) {
+        const other = await this.driver.select<{ n: number }>(
+          `SELECT COUNT(*) AS n FROM shifts WHERE employee_id = ? AND id NOT IN (${e.added.map(() => '?').join(',') || "''"})`,
+          [e.employeeId, ...e.added.map((x) => x.id)],
+        );
+        const entries = await this.driver.select<{ n: number }>(`SELECT COUNT(*) AS n FROM day_entries WHERE employee_id = ?`, [e.employeeId]);
+        if (Number(other[0].n) || Number(entries[0].n)) throw new RepoError(`לעובד ${e.fullName} נוספו נתונים לאחר הייבוא — לא ניתן לבטל אוטומטית`);
+      }
+      for (const sh of e.added) {
+        stmts.push({ sql: `DELETE FROM shifts WHERE id = ? AND business_id = ?`, params: [sh.id, businessId] }, audit('shift', 'delete', { businessId, employeeId: e.employeeId, entityId: sh.id }, shiftForAudit(sh), null));
+      }
+      for (const sh of e.removed) {
+        stmts.push(
+          {
+            sql: `INSERT INTO shifts (work_date, start_at, end_at, break_minutes, break_start, break_confirmed, break_paid, reviewed, note, created_at, updated_at, id, business_id, employee_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            params: [sh.workDate, sh.startAt, sh.endAt, sh.breakMinutes, sh.breakStart, b(sh.breakConfirmed), b(sh.breakPaid), b(sh.reviewed), sh.note ?? null, t, t, sh.id, businessId, e.employeeId],
+          },
+          audit('shift', 'create', { businessId, employeeId: e.employeeId, entityId: sh.id }, null, shiftForAudit(sh)),
+        );
+      }
+      if (e.created) {
+        stmts.push(
+          { sql: `DELETE FROM employee_settings WHERE employee_id = ?`, params: [e.employeeId] },
+          { sql: `DELETE FROM employees WHERE id = ? AND business_id = ?`, params: [e.employeeId, businessId] },
+          audit('employee', 'delete', { businessId, employeeId: e.employeeId, entityId: e.employeeId }, { fullName: e.fullName, source: 'bulk_import' }, null),
+        );
+      }
+    }
+    stmts.push(audit('attendance_import', 'bulk_import_undo', { businessId, entityId: null }, null, { employees: result.employees.length }));
+    await this.driver.batch(stmts);
   }
 
   // ---------------------------------------------------------------- day entries (status + note)

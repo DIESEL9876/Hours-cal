@@ -8,7 +8,7 @@ import { cleanText } from './values';
 
 export const MAX_ROWS = 5000;
 export const MAX_COLS = 80;
-export const MAX_SHEETS = 30;
+export const MAX_SHEETS = 100;
 
 // ---------------------------------------------------------------------------------------------
 // Text decoding

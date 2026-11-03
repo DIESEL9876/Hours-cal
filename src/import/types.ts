@@ -9,7 +9,7 @@
  */
 import type { LocalDate } from '../engine';
 
-export type SourceFormat = 'xlsx' | 'xls' | 'csv' | 'pdf' | 'pdf-ocr';
+export type SourceFormat = 'xlsx' | 'xls' | 'csv' | 'pdf' | 'pdf-ocr' | 'image-ocr';
 
 /** One spreadsheet-like cell after extraction. Values are never evaluated (no formulas, no macros). */
 export interface Cell {
@@ -36,6 +36,8 @@ export interface GridSheet {
   rowMeta?: { page?: number; employee?: string | null; employeeNo?: string | null }[];
   /** Free text found above/around the table (titles, labels) — used to detect employee name and period. */
   headerText?: string[];
+  /** Text printed below the table (e.g. "סה״כ שעות לעובד: 178.11") — used for cross-checks only. */
+  footerText?: string[];
 }
 
 export interface Grid {
@@ -45,7 +47,7 @@ export interface Grid {
   notes: string[];
 }
 
-export type Role = 'date' | 'exitDate' | 'weekday' | 'in' | 'out' | 'breakOut' | 'breakIn' | 'break' | 'total' | 'employee' | 'employeeNo';
+export type Role = 'date' | 'exitDate' | 'weekday' | 'in' | 'out' | 'breakOut' | 'breakIn' | 'break' | 'total' | 'employee' | 'employeeNo' | 'range' | 'remarks';
 
 export const ROLE_LABELS: Record<Role, string> = {
   date: 'תאריך',
@@ -59,6 +61,8 @@ export const ROLE_LABELS: Record<Role, string> = {
   total: 'סה״כ שעות',
   employee: 'שם עובד',
   employeeNo: 'מספר עובד',
+  range: 'טווח שעות',
+  remarks: 'הערות',
 };
 
 /** Pair of columns forming one work segment (entrance → exit). */
@@ -79,6 +83,12 @@ export interface ColumnMapping {
   employee: number | null;
   employeeNo: number | null;
   pairs: PairMapping[];
+  /** One column holding "entrance - exit" (e.g. "16:52 - 07:01"). Order is decided by the hours column, never by layout. */
+  range?: number | null;
+  /** Free-text remark columns ("הערות"). Times written there are flagged, never imported. */
+  remarks?: number[];
+  /** OCR content-based mapping: entrance/exit columns whose order on the page is not trusted (verified per row). */
+  unorderedPairs?: boolean;
 }
 
 export interface Detection {
@@ -118,6 +128,8 @@ export interface SourceRecord {
   breakMinutes: number | null;
   /** Worked total from a totals column (minutes), used only to detect "total without times". */
   totalMinutes: number | null;
+  /** The same value exactly as printed when it was decimal hours (e.g. 9.85) — for exact source-total comparison. */
+  totalHours?: number;
   /** Problems that require review (Hebrew). */
   flags: string[];
   /** Informational notes (Hebrew). */
@@ -146,6 +158,10 @@ export interface ReadResult {
   emptyDays: number;
   /** Rows whose date could not be read. */
   unreadableRows: number;
+  /** Overall worked total printed by the source (summary row / footer), minutes. Validation reference only. */
+  sourceTotalMinutes: number | null;
+  /** The printed total as decimal hours when it was printed that way (e.g. 178.11). */
+  sourceTotalHours: number | null;
   /** Period printed in the document, when found. */
   period: { from: LocalDate; to: LocalDate } | null;
   /** Distinct employees present in the table / pages. */

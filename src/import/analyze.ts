@@ -13,8 +13,10 @@ import {
   matchHeader,
   parseBreakCell,
   parseDateCell,
+  parseRangeCell,
   parseTimeCell,
   parseTotalCell,
+  clockSpan,
   type DateOrder,
   type HeaderMatch,
 } from './values';
@@ -218,10 +220,13 @@ export function detectTable(grid: Grid): Detection {
       employee: pick('employee'),
       employeeNo: pick('employeeNo'),
       pairs,
+      range: pick('range'),
+      remarks: b.roles.filter((x) => x.role === 'remarks').map((x) => x.col),
     };
+    if (grid.format === 'image-ocr' || grid.format === 'pdf-ocr') augmentFromContent(sheet, mapping);
     const reasons: string[] = [];
     if (pairAmbiguous) reasons.push('לא ניתן היה לשייך בוודאות את עמודות הכניסה והיציאה זו לזו.');
-    if (!pairs.length) reasons.push('לא נמצאו עמודות כניסה/יציאה.');
+    if (!pairs.length && mapping.range == null) reasons.push('לא נמצאו עמודות כניסה/יציאה.');
     if (b.roles.filter((x) => x.role === 'break').length > 1) reasons.push('נמצאה יותר מעמודת הפסקה אחת.');
     const labels = labelsOf(sheet, b.row, w);
     return {
@@ -261,9 +266,69 @@ export function detectTable(grid: Grid): Detection {
   };
 }
 
+/**
+ * OCR tables: column titles are often misread ("הפסקה" → "POY"). Unmapped columns are typed by their CONTENT on dated
+ * rows: two clock times per cell → time range; decimal hours → hours; short durations (0:00–4:00) → break.
+ */
+function augmentFromContent(sheet: GridSheet, mapping: ColumnMapping) {
+  const used = new Set<number>([mapping.date, mapping.weekday, mapping.total, mapping.break, mapping.range ?? null, ...mapping.pairs.flatMap((p) => [p.in, p.out])].filter((x): x is number => x !== null));
+  const rows = sheet.rows.slice(mapping.headerRow + 1).filter((row) => dateish(row[mapping.date] ?? EMPTY));
+  if (!rows.length) return;
+  const minFilled = Math.min(3, rows.length);
+  const w = width(sheet);
+  const kinds = (c: number) => {
+    let range = 0;
+    let decimal = 0;
+    let short = 0;
+    let filled = 0;
+    for (const row of rows) {
+      const t = cleanText(row[c]?.text ?? '');
+      if (!t) continue;
+      filled++;
+      if ((t.match(/\d{1,2}[:.]\d{2}/g) ?? []).length === 2) range++;
+      else if (/^\d{1,2}\.\d{2}$/.test(t) && Number(t) <= 24) decimal++;
+      else if (/^[0-4]:[0-5]\d$/.test(t)) short++;
+    }
+    return { range, decimal, short, filled };
+  };
+  for (let c = 0; c < w; c++) {
+    if (used.has(c)) continue;
+    const k = kinds(c);
+    if (k.filled < minFilled) continue;
+    if (mapping.range == null && !mapping.pairs.length && k.range >= k.filled * 0.5) {
+      mapping.range = c;
+      used.add(c);
+    } else if (mapping.total === null && k.decimal >= k.filled * 0.7) {
+      mapping.total = c;
+      used.add(c);
+    } else if (mapping.break === null && k.short >= k.filled * 0.7) {
+      mapping.break = c;
+      used.add(c);
+    }
+  }
+}
+
 // ---------------------------------------------------------------------------------------------
 // Reading rows
 // ---------------------------------------------------------------------------------------------
+
+/** A month total ("178.11" decimal hours, "178:07", or a plain number of hours) → minutes; >24 h allowed. */
+function parseMonthTotal(cell: Cell): number | null {
+  if (cell.serial !== undefined && !cell.isDateLike) return cell.serial >= 0 && cell.serial < 2000 ? Math.round(cell.serial * 60) : null;
+  if (cell.serial !== undefined && cell.isDateLike) return cell.serial < 100 ? Math.round(cell.serial * 1440) : null;
+  const t = cleanText(cell.text);
+  const hm = /^(\d{1,4}):(\d{2})$/.exec(t);
+  if (hm) return Number(hm[1]) * 60 + Number(hm[2]);
+  if (/^\d{1,4}(\.\d{1,2})?$/.test(t)) return Math.round(Number(t) * 60);
+  return null;
+}
+
+/** Row confidence: lowest cell confidence; a time range verified against the hours value counts as 80 at least. */
+function rowConf(base: number | undefined, range: number | undefined, verified: boolean): number | undefined {
+  if (range === undefined) return base;
+  const r = verified ? Math.max(range, 80) : range;
+  return base === undefined ? r : Math.min(base, r);
+}
 
 function minConf(cells: Cell[]): number | undefined {
   const c = cells.map((x) => x.conf).filter((x): x is number => typeof x === 'number');
@@ -340,6 +405,10 @@ export function readRecords(grid: Grid, mapping: ColumnMapping, opts: ReadOption
     notes: [],
   });
   let summaryRows = 0;
+  let lastSummaryTotal: number | null = null;
+  let generalTotal: number | null = null;
+  let lastSummaryHours: number | null = null;
+  let generalTotalHours: number | null = null;
   let emptyDays = 0;
   let unreadableRows = 0;
   /** Last row that carried a date, and the record created for it (if any). */
@@ -366,6 +435,20 @@ export function readRecords(grid: Grid, mapping: ColumnMapping, opts: ReadOption
       if (!nonEmpty.length) continue;
       if (row.slice(0, 6).some((c) => isSummaryText(c.text)) || isSummaryText(dateText)) {
         summaryRows++;
+        if (mapping.total !== null) {
+          const v = parseMonthTotal(cellAt(sheet, r, mapping.total));
+          const label = row.slice(0, 6).map((c) => cleanText(c.text)).find((t) => isSummaryText(t)) ?? dateText;
+          if (v !== null) {
+            const tc = cellAt(sheet, r, mapping.total);
+            const hrs = tc.serial !== undefined && !tc.isDateLike ? tc.serial : /^\d{1,4}\.\d{1,2}$/.test(cleanText(tc.text)) ? Number(cleanText(tc.text)) : null;
+            lastSummaryTotal = v;
+            lastSummaryHours = hrs;
+            if (/כללי|total|grand/i.test(label)) {
+              generalTotal = v;
+              generalTotalHours = hrs;
+            }
+          }
+        }
         continue;
       }
       // Header repeated on a new page.
@@ -398,7 +481,14 @@ export function readRecords(grid: Grid, mapping: ColumnMapping, opts: ReadOption
       if (typeof b === 'number') breakMinutes = b;
       else if (b && 'error' in b) flags.push(b.error);
     }
-    const totalMinutes = mapping.total !== null ? parseTotalCell(cellAt(sheet, r, mapping.total)) : null;
+    let totalMinutes = mapping.total !== null ? parseTotalCell(cellAt(sheet, r, mapping.total)) : null;
+    let totalHours: number | undefined;
+    if (mapping.total !== null && totalMinutes !== null) {
+      const tc = cellAt(sheet, r, mapping.total);
+      const tt = cleanText(tc.text);
+      if (tc.serial !== undefined && !tc.isDateLike) totalHours = tc.serial;
+      else if (/^\d{1,2}\.\d{1,2}$/.test(tt)) totalHours = Number(tt);
+    }
 
     // Explicit exit date column (rare): attach to the last segment's exit.
     if (mapping.exitDate !== null && segments.length) {
@@ -417,6 +507,58 @@ export function readRecords(grid: Grid, mapping: ColumnMapping, opts: ReadOption
         employeeNo: mapping.employeeNo !== null ? cleanText(cellAt(sheet, r, mapping.employeeNo).text) || null : meta?.employeeNo ?? null,
       };
       if (!categoryHints.some((h) => h.date === hint.date && h.employee === hint.employee && h.employeeNo === hint.employeeNo)) categoryHints.push(hint);
+    }
+
+    let rangeConf: number | undefined;
+    let rangeVerified = false;
+    // "Entrance - exit" in one column: which time is the entrance is decided by the row's hours value.
+    // OCR may place one of the two times in a neighbouring unlabelled column — those cells are read together.
+    if (mapping.range != null) {
+      const used = new Set<number>([mapping.date, mapping.weekday, mapping.total, mapping.break, mapping.employee, mapping.employeeNo, mapping.exitDate, ...(mapping.remarks ?? [])].filter((x): x is number => x !== null && x !== undefined));
+      for (const p of mapping.pairs) for (const c of [p.in, p.out]) if (c !== null) used.add(c);
+      const extra = grid.format === 'image-ocr' || grid.format === 'pdf-ocr' ? row.map((_, c) => c).filter((c) => c !== mapping.range && !used.has(c) && /\d/.test(row[c]?.text ?? '')) : [];
+      const cells = [mapping.range, ...extra].sort((x, y) => x - y).map((c) => cellAt(sheet, r, c));
+      // Reading order of the cells (right-to-left sheets: higher column index first in the source = earlier).
+      const parts = cells.flatMap((c) => (c.parts && c.parts.length ? c.parts : c.text ? [c.text] : []));
+      const confs = cells.map((c) => c.conf).filter((x): x is number => typeof x === 'number');
+      const rg = parseRangeCell({ text: parts.join(' '), parts, conf: confs.length ? Math.min(...confs) : undefined });
+      if (rg && 'error' in rg) {
+        flags.push(rg.error);
+        const one = /(?<![\d.:])(\d{1,2}):(\d{2})(?!\d)/.exec(parts.join(' '));
+        if (one && totalMinutes !== null && Number(one[1]) < 24 && Number(one[2]) < 60) {
+          const t = Number(one[1]) * 60 + Number(one[2]);
+          const f = (m: number) => `${String(Math.floor((((m % 1440) + 1440) % 1440) / 60)).padStart(2, '0')}:${String((((m % 1440) + 1440) % 1440) % 60).padStart(2, '0')}`;
+          notes.push(`לפי סה״כ השעות בשורה (${fmtHours(totalMinutes)}) אפשרי ${one[0]}–${f(t + totalMinutes)} או ${f(t - totalMinutes)}–${one[0]} — יש להזין לפי המסמך המקורי`);
+        }
+      } else if (rg) {
+        flags.push(...rg.flags);
+        if (totalMinutes === null && rg.hours !== undefined) {
+          totalMinutes = rg.hours;
+          totalHours = rg.hours / 60;
+          notes.push('ערך השעות של השורה נקרא צמוד לטווח השעות');
+        }
+        const { verified, ...seg } = orderedRange(rg.a, rg.b, totalMinutes, flags, notes);
+        segments.push(seg);
+        rangeConf = rg && 'a' in rg ? Math.min(...cells.map((c) => c.conf ?? 100)) : undefined;
+        // Times and the hours value were read independently; their exact agreement validates the OCR reading.
+        const totalConf = mapping.total !== null ? cellAt(sheet, r, mapping.total).conf : undefined;
+        if (verified && (totalConf === undefined || totalConf >= 85)) {
+          rangeVerified = true;
+          if (rangeConf !== undefined && rangeConf < 80) notes.push('שעות שזוהו בביטחון נמוך אומתו מול סה״כ השעות בשורה');
+        }
+      }
+    }
+    if (mapping.unorderedPairs && totalMinutes !== null && segments.length === 1 && segments[0].start && segments[0].end) {
+      const s0 = segments[0];
+      const ordered = orderedRange(s0.start!, s0.end!, totalMinutes, flags, notes);
+      segments[0] = { ...s0, start: ordered.start, end: ordered.end };
+    }
+    checkTotal(segments, breakMinutes, totalMinutes, flags, notes);
+    for (const rc of mapping.remarks ?? []) {
+      const remark = cleanText(cellAt(sheet, r, rc).text);
+      if (!remark) continue;
+      if (/\d{1,2}[:.]\d{2}/.test(remark)) flags.push(`בהערות במקור מופיעות שעות שלא נקלטו ("${remark.slice(0, 40)}") — יש לבדוק ולהזין ידנית אם צריך`);
+      else notes.push(`הערה במקור: ${remark.slice(0, 60)}`);
     }
 
     const realSegments = segments.filter((s) => s.start || s.end);
@@ -440,9 +582,10 @@ export function readRecords(grid: Grid, mapping: ColumnMapping, opts: ReadOption
       segments: realSegments,
       breakMinutes,
       totalMinutes,
+      ...(totalHours !== undefined ? { totalHours } : {}),
       flags,
       notes,
-      conf: minConf(usedCells),
+      conf: rowConf(minConf(usedCells), rangeConf, rangeVerified),
     };
     records.push(rec);
     lastDated = { date, record: rec };
@@ -455,7 +598,55 @@ export function readRecords(grid: Grid, mapping: ColumnMapping, opts: ReadOption
     e.rows++;
     empMap.set(key, e);
   }
-  return { records, categoryHints, summaryRows, emptyDays, unreadableRows, period, employees: [...empMap.values()] };
+  // "סה״כ" is often misread by OCR; a footer line about hours ("שעות", "לעובד") with one number also counts.
+  const footerTexts = (sheet.footerText ?? []).filter((l) => /סה["״']?כ|total|שעות|לעובד/i.test(l)).map((l) => (/(\d{1,4}[.:]\d{2})(?!.*\d)/.exec(cleanText(l)) ?? [''])[0]).filter((t) => parseMonthTotal({ text: t }) !== null);
+  const footer = footerTexts.length === 1 && empMap.size <= 1 ? footerTexts[0] : null;
+  const sourceTotalMinutes = generalTotal ?? lastSummaryTotal ?? (footer ? parseMonthTotal({ text: footer }) : null);
+  const sourceTotalHours = generalTotal !== null || lastSummaryTotal !== null ? (generalTotalHours ?? lastSummaryHours) : footer && footer.includes('.') ? Number(footer) : null;
+  return { records, categoryHints, summaryRows, emptyDays, unreadableRows, period, employees: [...empMap.values()], sourceTotalMinutes, sourceTotalHours };
+}
+
+/**
+ * Entrance/exit order of two clock times read from one row. The row's hours value decides: the order whose
+ * duration equals it (±1 minute) is used. Without a matching value the reading order is kept and the row flagged.
+ * Times are never swapped because of how an RTL page displays them.
+ */
+function orderedRange(a: string, b: string, total: number | null, flags: string[], notes: string[]): SourceSegment & { verified?: boolean } {
+  if (total !== null) {
+    const ab = Math.abs(clockSpan(a, b) - total) <= 1;
+    const ba = Math.abs(clockSpan(b, a) - total) <= 1;
+    if (ab && !ba) return { start: a, end: b, verified: true };
+    if (ba && !ab) {
+      notes.push(`סדר הכניסה והיציאה נקבע לפי סה״כ השעות בשורה (${b}–${a})`);
+      return { start: b, end: a, verified: true };
+    }
+    if (ab && ba) flags.push('לא ניתן לקבוע מה שעת הכניסה ומה שעת היציאה — יש לבדוק');
+    else flags.push(`סה״כ השעות בשורה (${fmtHours(total)}) אינו תואם לשעות ${a}–${b} — יש לבדוק`);
+    return { start: a, end: b };
+  }
+  if (clockSpan(a, b) > 16 * 60) flags.push(`לא ניתן לאמת את סדר השעות ${a}–${b} (אין סה״כ שעות בשורה)`);
+  return { start: a, end: b };
+}
+
+const fmtHours = (m: number) => `${Math.floor(m / 60)}:${String(m % 60).padStart(2, '0')}`;
+
+/** Source hours value vs. the recorded times (gross, or gross − explicit break). A mismatch is flagged; never "fixed". */
+function checkTotal(segments: SourceSegment[], breakMinutes: number | null, total: number | null, flags: string[], notes: string[]) {
+  if (total === null || !segments.length || segments.some((s) => !s.start || !s.end)) return;
+  const gross = segments.reduce((sum, s) => {
+    if (s.startDate && s.endDate) {
+      const d = Math.round((Date.parse(`${s.endDate}T${s.end}:00Z`) - Date.parse(`${s.startDate}T${s.start}:00Z`)) / 60000);
+      return sum + d;
+    }
+    return sum + clockSpan(s.start!, s.end!);
+  }, 0);
+  if (Math.abs(gross - total) <= 1) return;
+  if (breakMinutes !== null && Math.abs(gross - breakMinutes - total) <= 1) return;
+  if (flags.some((f) => f.startsWith('סה״כ השעות בשורה'))) return;
+  const diff = gross - total;
+  // Up to 90 minutes less than the recorded times: most likely a break the source system deducted (information).
+  if (diff > 0 && diff <= 90) notes.push(`סה״כ השעות במקור (${fmtHours(total)}) נמוך ממשך הרישומים (${fmtHours(gross)}) — ייתכן שבמקור נוכתה הפסקה; החישוב ייעשה לפי הרישומים`);
+  else flags.push(`סה״כ השעות במקור (${fmtHours(total)}) אינו תואם למשך הרישומים (${fmtHours(gross)}) — יש לבדוק`);
 }
 
 /** Builds a mapping from a manual role→column selection made in the mapping UI. */
