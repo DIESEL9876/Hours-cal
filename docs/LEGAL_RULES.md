@@ -374,3 +374,20 @@ A clause executes only with all three of:
 - the instrument being in force.
 
 Conflicting verified instruments are never cherry-picked. **No clause is activated in 1.1.10.**
+
+## 13. Transcribed agreement clauses (1.1.11)
+
+- **What can be transcribed:** applicable instruments' calculation clauses, by a payroll professional, from the **official text**:
+  - hours thresholds;
+  - overtime tier rates;
+  - rest/holiday rates;
+  - night/shift premium;
+  - sector minimum hourly wage.
+- **What each transcription records:** clause reference, effective dates, verifier and values.
+- **Execution conditions:**
+  - a complete applicability confirmation (§12.3);
+  - values no less favourable than the statute: tiers ≥ 125/150%, rest/holiday ≥ 150%, week ≤ 42 h, day ≤ 8:36, first tier ≤ 2 h;
+  - no conflict with another instrument for the same domain and period.
+- **Effect:** rates change the pay estimate only; recorded minutes are unchanged. The minimum wage is a compliance check. Each day cites the clause.
+- **Closed months:** clauses verified after a month's close are ignored for that month.
+- **Status:** no official document could be opened in 1.1.11, so **no catalog clause is verified**. See `COVERAGE_REPORT_1.1.11.md`.

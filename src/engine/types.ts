@@ -131,6 +131,9 @@ export interface TravelSettings {
 /** An agreement chosen for an employee. Rules are used only after the applicability confirmation. */
 export interface AgreementSelection {
   catalogId: string;
+  /** 1.1.11: for an instrument not in the catalog — its registered title and registration number. */
+  title?: string;
+  registrationNumber?: string;
   /** Applicability confirmation (who / when / on what basis). Absent = reference only, no rules applied. */
   confirmation?: {
     by: string;
@@ -158,7 +161,36 @@ export interface AgreementSelection {
 }
 
 export type EmployeeClass = 'site_worker' | 'office_staff' | 'contractor_worker' | 'client_employee' | 'other';
-export type AgreementClause = 'hours' | 'recuperation' | 'travel';
+export type AgreementClause = 'hours' | 'recuperation' | 'travel' | 'overtime_rates' | 'rest_holiday_rates' | 'night_premium' | 'minimum_wage';
+
+/**
+ * 1.1.11: values a payroll professional transcribed from the OFFICIAL text of an instrument (with the clause reference
+ * and its effective dates). Only the field matching the clause is used. Percentages are integers (125 = 125%).
+ */
+export interface TranscribedValues {
+  /** hours: regular daily thresholds Sunday…Saturday (minutes; 0 = not a workday), weekly threshold, first-tier minutes. */
+  hours?: { dailyThresholdMinutes: number[]; weeklyThresholdMinutes: number; firstTierMinutes: number };
+  /** overtime_rates: first and second overtime tier (statute 125 / 150). */
+  overtimeRates?: { tier1Percent: number; tier2Percent: number };
+  /** rest_holiday_rates: regular minutes on the weekly rest / a holiday (statute 150). */
+  restHolidayRates?: { restPercent: number; holidayPercent: number };
+  /** night_premium: an ADDITIONAL percentage for every minute between start and end (minutes of the day). */
+  nightPremium?: { startMinute: number; endMinute: number; percent: number };
+  /** minimum_wage: sector minimum hourly wage (agorot) — compared with the employee's rate, never changes it. */
+  minimumHourlyAgorot?: number;
+}
+
+/** A verified, executable pay clause handed to the engine (1.1.11). Date-ranged; one instrument per domain. */
+export interface AgreementPayRule {
+  from: LocalDate;
+  to: LocalDate | null;
+  /** Hebrew citation: instrument, clause reference, verifier. */
+  source: string;
+  overtimeRates?: { tier1Percent: number; tier2Percent: number };
+  restHolidayRates?: { restPercent: number; holidayPercent: number };
+  nightPremium?: { startMinute: number; endMinute: number; percent: number };
+  minimumHourlyAgorot?: number;
+}
 export interface ClauseVerification {
   profileVersion: string;
   clause: AgreementClause;
@@ -166,8 +198,12 @@ export interface ClauseVerification {
   clauseRef: string;
   /** Date from which the clause applies, per the official text. */
   effectiveFrom: LocalDate;
+  /** Last date the clause applies (1.1.11, optional). */
+  effectiveTo?: LocalDate | null;
   by: string;
   at: string;
+  /** 1.1.11: values transcribed from the official text (for clauses the catalog does not encode). */
+  values?: TranscribedValues;
 }
 
 /** Thresholds taken from a VERIFIED agreement rule profile (applied by the engine like a contractual profile). */
@@ -572,6 +608,8 @@ export interface EmployeePeriodInput {
   birthDate?: LocalDate | null;
   /** Youth employment details (1.1.10). */
   youth?: YouthProfile | null;
+  /** Verified pay clauses of applicable instruments (1.1.11). */
+  agreementPay?: AgreementPayRule[];
   /** Youth rule set: 'Y2' (default) or 'Y1' for months finalised under 1.1.9. */
   youthRuleSet?: YouthRuleSet;
   /** Per-month manual value of a paid absence day (minutes), with the reason (1.1.9). */

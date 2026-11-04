@@ -15,6 +15,7 @@ under the Israeli Hours of Work and Rest framework. Full Hebrew RTL interface.
 | [`docs/LEGAL_RULES.md`](docs/LEGAL_RULES.md) | Every rule applied, its source, verification status/date, and the exact algorithm |
 | [`docs/REVIEW_CASES.md`](docs/REVIEW_CASES.md) | Exceptional cases that require human payroll review (with flag codes) |
 | [`docs/USER_GUIDE_HE.md`](docs/USER_GUIDE_HE.md) | Short Hebrew user guide |
+| [`docs/COVERAGE_REPORT_1.1.11.md`](docs/COVERAGE_REPORT_1.1.11.md) | 1.1.11: source-access assessment, catalog coverage by sector and evidence class, executable clauses, files to provide, regression results |
 | [`docs/LEGAL_AUDIT_1.1.10.md`](docs/LEGAL_AUDIT_1.1.10.md) | 1.1.10: audit of 1.1.9 against the legal research pack — correct / changed / not automatable, and the source and effective date of each activated rule |
 | [`docs/RELEASE_1.1.9_REPORT.md`](docs/RELEASE_1.1.9_REPORT.md) | 1.1.9: calculation verification, legal sources, agreements coverage, rules needing professional review, data-survival confirmation |
 | [`docs/LICENSE_MANAGER_GUIDE_HE.md`](docs/LICENSE_MANAGER_GUIDE_HE.md) | Hebrew guide for the owner-only License Manager (key setup, issuing, registry, backups, go-live) |
@@ -189,6 +190,18 @@ Rules and sources: `docs/LEGAL_RULES.md` §11. Verification and coverage: `docs/
 - **Outputs:** totals bar, business monthly summary columns, Excel ("רכיבי שכר" sheet), CSV (appended table), print.
 - **Data:** migration v3 is additive (`employees.birth_date`, `monthly_adjustments`, `employee_months`, `month_reviews.rules_json`). A pre-migration backup is taken first.
 - **Tests:** `src/engine/__tests__/payroll119.test.ts`, `src/data/__tests__/payroll119.test.ts`, `e2e/payroll.spec.ts`.
+
+## Verified agreement clauses (1.1.11)
+
+- **Transcription:** a payroll professional transcribes a clause from the official text of an instrument (catalog or "not listed" with title and registration number): hours thresholds, overtime tier rates, rest/holiday rates, night/shift premium, sector minimum wage. The record holds the clause reference, effective dates and the verifier.
+- **Resolution** (`agreementPayFor` / `agreementHoursFor` in `src/agreements/rules.ts`):
+  - complete applicability confirmation required;
+  - sub-statutory values rejected;
+  - conflicting instruments block each other.
+- **Engine effect:** `bucketPercents` and the night premium change the pay estimate only; minutes are unchanged. The sector minimum wage is a compliance warning.
+- **Closed months:** clauses verified after a month was closed are ignored for that month.
+- **Catalog** `2026.11.04.2`: 29 instruments, 15-sector Hebrew filter, evidence classes including "search index only".
+- **Coverage:** `docs/COVERAGE_REPORT_1.1.11.md`. No official document could be opened in 1.1.11 (network policy), so no catalog clause is verified.
 
 ## Legal corrections (1.1.10)
 

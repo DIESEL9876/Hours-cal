@@ -22,6 +22,7 @@ import type {
   PeriodTotals,
   PaidDayInfo,
   AgreementHoursRule,
+  AgreementPayRule,
   Premium,
   SettingsVersion,
   ShiftInput,
@@ -918,7 +919,16 @@ export function calculateEmployeePeriod(input: EmployeePeriodInput, opts: { skip
   }
   for (const dw of dayWork.values()) {
     buildExplanation(dw);
-    dw.payUnits = payUnitsFor(dw);
+    // 1.1.11: verified pay clauses of an applicable instrument (rates, night premium, sector minimum wage).
+    const payRule = payRuleOn(input.agreementPay, dw.date);
+    if (payRule && dw.result.worked) {
+      if (payRule.overtimeRates || payRule.restHolidayRates || payRule.nightPremium)
+        dw.result.explanation.push(`הערכת העלות לפי סעיפים מאומתים: ${payRule.source}.`);
+      const rate = dw.version?.settings.hourlyRateAgorot ?? null;
+      if (payRule.minimumHourlyAgorot && rate !== null && rate < payRule.minimumHourlyAgorot)
+        warn(dw.result.warnings, 'AGREEMENT_MIN_WAGE', 'compliance', `השכר השעתי (₪${(rate / 100).toFixed(2)}) נמוך משכר המינימום הענפי (₪${(payRule.minimumHourlyAgorot / 100).toFixed(2)}) — ${payRule.source}`, dw.date);
+    }
+    dw.payUnits = payUnitsFor(dw, payRule);
     dw.result.payAgorot = dw.payUnits === null ? null : roundPayUnits(dw.payUnits);
     if (sumBuckets(dw.result.buckets) !== dw.result.netMinutes) throw new Error(`internal: reconciliation failed on ${dw.date}`);
   }
@@ -1073,11 +1083,39 @@ function buildExplanation(dw: DayWork) {
 // ---------------------------------------------------------------------------
 
 /** units = minutes × percent × rateAgorot; agorot = units / 6000. */
-function payUnitsFor(dw: DayWork): number | null {
+/**
+ * Percent per bucket. Without a verified agreement rule this is exactly BUCKET_PERCENT. With one (1.1.11), the
+ * overtime tiers and the rest/holiday base rate come from the verified clause and the combined buckets keep the
+ * statute's structure (rest + first tier = rest% + (tier1% − 100), …).
+ */
+export function bucketPercents(rule: Pick<AgreementPayRule, 'overtimeRates' | 'restHolidayRates'> | null): Record<keyof MinuteBuckets, number> {
+  if (!rule?.overtimeRates && !rule?.restHolidayRates) return BUCKET_PERCENT;
+  const t1 = rule.overtimeRates?.tier1Percent ?? 125;
+  const t2 = rule.overtimeRates?.tier2Percent ?? 150;
+  const r = rule.restHolidayRates?.restPercent ?? 150;
+  const h = rule.restHolidayRates?.holidayPercent ?? 150;
+  return { regular: 100, ot125: t1, ot150: t2, rest150: r, rest175: r + t1 - 100, rest200: r + t2 - 100, holiday150: h, holiday175: h + t1 - 100, holiday200: h + t2 - 100, unclassified: 100 };
+}
+
+/** The verified pay clauses in force on a date (the resolver guarantees one instrument per domain). */
+function payRuleOn(rules: AgreementPayRule[] | undefined, date: LocalDate): AgreementPayRule | null {
+  const on = (rules ?? []).filter((r) => date >= r.from && (r.to === null || date <= r.to));
+  if (!on.length) return null;
+  return on.reduce<AgreementPayRule>((acc, r) => ({ ...acc, ...r, source: acc.source ? `${acc.source}; ${r.source}` : r.source }), { from: date, to: date, source: '' });
+}
+
+const inWindow = (t: number, start: number, end: number) => (start < end ? t >= start && t < end : t >= start || t < end);
+
+function payUnitsFor(dw: DayWork, rule: AgreementPayRule | null = null): number | null {
   const rate = dw.version?.settings.hourlyRateAgorot ?? null;
   if (rate === null) return null;
+  const pct = bucketPercents(rule);
   let units = 0;
-  for (const k of Object.keys(dw.result.buckets) as (keyof MinuteBuckets)[]) units += dw.result.buckets[k] * BUCKET_PERCENT[k] * rate;
+  for (const k of Object.keys(dw.result.buckets) as (keyof MinuteBuckets)[]) units += dw.result.buckets[k] * pct[k] * rate;
+  if (rule?.nightPremium) {
+    const n = rule.nightPremium;
+    units += dw.minutes.filter((m) => inWindow(utcToLocal(m.ms).minuteOfDay, n.startMinute, n.endMinute)).length * n.percent * rate;
+  }
   if (!Number.isSafeInteger(units)) throw new Error('pay overflow');
   return units;
 }

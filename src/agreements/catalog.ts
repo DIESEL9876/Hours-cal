@@ -24,7 +24,7 @@
  */
 import type { EmployeeClass, LocalDate } from '../engine';
 
-export const CATALOG_VERSION = '2026.11.04';
+export const CATALOG_VERSION = '2026.11.04.2';
 export const CATALOG_VERIFIED_ON: LocalDate = '2026-11-04';
 
 export type InstrumentType =
@@ -76,7 +76,49 @@ export const PRECEDENCE: Record<InstrumentType, number> = {
 };
 
 export type Verification = 'primary' | 'secondary' | 'metadata_only';
-export type Evidence = 'official_text_located' | 'official_gazette_located' | 'official_circular_located' | 'official_notice_located' | 'directory_only' | 'unapproved_secondary';
+export type Evidence =
+  | 'official_text_located'
+  | 'official_gazette_located'
+  | 'official_circular_located'
+  | 'official_notice_located'
+  | 'directory_only'
+  | 'search_index_only'
+  | 'unapproved_secondary';
+
+/** Employment sector (for filtering). An instrument applies only per its own definitions, never by sector alone. */
+export type Sector =
+  | 'general'
+  | 'cleaning'
+  | 'security'
+  | 'construction'
+  | 'hospitality'
+  | 'food_service'
+  | 'events'
+  | 'transport'
+  | 'retail'
+  | 'industry'
+  | 'agriculture'
+  | 'care'
+  | 'welfare'
+  | 'manpower'
+  | 'services';
+export const SECTOR_LABELS: Record<Sector, string> = {
+  general: 'כלל המשק',
+  cleaning: 'ניקיון ואחזקה',
+  security: 'שמירה ואבטחה',
+  construction: 'בנייה ותשתיות',
+  hospitality: 'מלונאות ותיירות',
+  food_service: 'הסעדה',
+  events: 'אולמות ואירועים',
+  transport: 'תחבורה, הובלה והיסעים',
+  retail: 'מסחר ורשתות מזון',
+  industry: 'תעשייה וייצור',
+  agriculture: 'חקלאות',
+  care: 'סיעוד וטיפול',
+  welfare: 'רווחה',
+  manpower: 'כוח אדם',
+  services: 'שירותים ומלאכה',
+};
 
 export const EVIDENCE_LABELS: Record<Evidence, string> = {
   official_text_located: 'נוסח רשמי אותר (PDF ממשלתי)',
@@ -84,6 +126,7 @@ export const EVIDENCE_LABELS: Record<Evidence, string> = {
   official_circular_located: 'חוזר רשמי בנושא (אינו נוסח הצו)',
   official_notice_located: 'הודעה רשמית בנושא (אינה נוסח הצו)',
   directory_only: 'רשום במאגר הממשלתי בלבד',
+  search_index_only: 'קובץ רשמי אותר באינדקס חיפוש בלבד — לא נפתח',
   unapproved_secondary: 'מקורות משניים בלבד',
 };
 
@@ -142,6 +185,7 @@ export interface CatalogEntry {
   researchId: string | null;
   name: string;
   type: InstrumentType;
+  sector: Sector;
   /** Official registration / publication number — null where it could not be verified. */
   officialNumber: string | null;
   /** Year of the located document (the document year is not necessarily the legal effective date). */
@@ -182,6 +226,7 @@ const DIRECTORY = 'https://www.gov.il/he/Departments/dynamiccollectors/extension
 const MINISTRY_AGREEMENTS = 'https://www.gov.il/he/departments/units/working-relations';
 const PDF = (slug: string) => `https://www.gov.il/BlobFolder/dynamiccollectorresultitem/${slug}/he/${slug}.pdf`;
 const PACK = 'אותר בחבילת המחקר מ-04.11.2026';
+const INDEX = 'אותר באינדקס חיפוש ב-04.11.2026';
 const NOT_OPENED = 'המסמך לא נפתח בסביבת הבנייה (חסימת רשת); הוראותיו לא חולצו ואינן מקודדות';
 
 /** Entry without encoded rules — reference only. */
@@ -195,6 +240,7 @@ export const CATALOG: CatalogEntry[] = [
     researchId: 'COLL-001',
     name: 'צו הרחבה בדבר קיצור שבוע העבודה במשק (42 שעות)',
     type: 'general_extension_order',
+    sector: 'general',
     officialNumber: null,
     publicationYear: 2018,
     industry: 'כלל המשק',
@@ -227,6 +273,7 @@ export const CATALOG: CatalogEntry[] = [
     researchId: 'COLL-002',
     name: 'צו הרחבה בדבר השתתפות המעביד בהוצאות נסיעה לעבודה וממנה',
     type: 'general_extension_order',
+    sector: 'general',
     officialNumber: null,
     publicationYear: 2016,
     industry: 'כלל המשק',
@@ -264,6 +311,7 @@ export const CATALOG: CatalogEntry[] = [
     researchId: 'COLL-003',
     name: 'צו הרחבה בענף הניקיון (2014)',
     type: 'industry_extension_order',
+    sector: 'cleaning',
     officialNumber: null,
     publicationYear: 2014,
     industry: 'ניקיון ואחזקה',
@@ -286,6 +334,7 @@ export const CATALOG: CatalogEntry[] = [
     researchId: 'COLL-004',
     name: 'צו הרחבה בענף השמירה והאבטחה (חוזר 2022)',
     type: 'industry_extension_order',
+    sector: 'security',
     officialNumber: null,
     publicationYear: 2022,
     industry: 'שמירה ואבטחה',
@@ -308,6 +357,7 @@ export const CATALOG: CatalogEntry[] = [
     researchId: 'COLL-005',
     name: 'צו הרחבה בענף הבנייה, התשתיות, הצמ״ה, העבודות הציבוריות והשיפוצים (2015)',
     type: 'industry_extension_order',
+    sector: 'construction',
     officialNumber: null,
     publicationYear: 2015,
     industry: 'בנייה, תשתיות, צמ״ה, עבודות ציבוריות ושיפוצים',
@@ -330,6 +380,7 @@ export const CATALOG: CatalogEntry[] = [
     researchId: 'COLL-006',
     name: 'צו הרחבה בענף שירותי ההסעדה המוסדית (2025)',
     type: 'industry_extension_order',
+    sector: 'food_service',
     officialNumber: null,
     publicationYear: 2025,
     industry: 'הסעדה מוסדית',
@@ -348,6 +399,7 @@ export const CATALOG: CatalogEntry[] = [
     researchId: 'COLL-007',
     name: 'צו הרחבה בענף המלונאות (1995)',
     type: 'industry_extension_order',
+    sector: 'hospitality',
     officialNumber: null,
     publicationYear: 1995,
     industry: 'מלונאות ואירוח',
@@ -367,6 +419,7 @@ export const CATALOG: CatalogEntry[] = [
     researchId: 'COLL-008',
     name: 'צו הרחבה בענף אולמות וגני האירועים (2008)',
     type: 'industry_extension_order',
+    sector: 'events',
     officialNumber: null,
     publicationYear: 2008,
     industry: 'אולמות וגני אירועים',
@@ -385,6 +438,7 @@ export const CATALOG: CatalogEntry[] = [
     researchId: 'COLL-009',
     name: 'צו הרחבה בענף רשתות שיווק המזון (2010)',
     type: 'industry_extension_order',
+    sector: 'retail',
     officialNumber: null,
     publicationYear: 2010,
     industry: 'רשתות שיווק מזון',
@@ -403,6 +457,7 @@ export const CATALOG: CatalogEntry[] = [
     researchId: 'COLL-010',
     name: 'צו הרחבה בענף ההובלה (1989)',
     type: 'industry_extension_order',
+    sector: 'transport',
     officialNumber: null,
     publicationYear: 1989,
     industry: 'הובלה',
@@ -426,6 +481,7 @@ export const CATALOG: CatalogEntry[] = [
     researchId: 'COLL-011',
     name: 'צו הרחבה בענף ההובלה (2007)',
     type: 'industry_extension_order',
+    sector: 'transport',
     officialNumber: null,
     publicationYear: 2007,
     industry: 'הובלה',
@@ -444,6 +500,7 @@ export const CATALOG: CatalogEntry[] = [
     researchId: 'COLL-012',
     name: 'צו הרחבה בענף ההובלה — משא כבד (2008)',
     type: 'industry_extension_order',
+    sector: 'transport',
     officialNumber: null,
     publicationYear: 2008,
     industry: 'הובלת משא כבד',
@@ -462,6 +519,7 @@ export const CATALOG: CatalogEntry[] = [
     researchId: 'COLL-013',
     name: 'צו הרחבה בענף המתכת ומוצרי החשמל — נוער (1975)',
     type: 'industry_extension_order',
+    sector: 'industry',
     officialNumber: null,
     publicationYear: 1975,
     industry: 'מתכת ומוצרי חשמל',
@@ -481,6 +539,7 @@ export const CATALOG: CatalogEntry[] = [
     researchId: 'COLL-014',
     name: 'צווי הרחבה לעובדים סוציאליים המועסקים לפי התקשרויות המדינה (2025)',
     type: 'industry_extension_order',
+    sector: 'welfare',
     officialNumber: null,
     publicationYear: 2025,
     industry: 'רווחה — עובדים סוציאליים',
@@ -499,6 +558,7 @@ export const CATALOG: CatalogEntry[] = [
     researchId: 'COLL-015',
     name: 'צו הרחבה בעניין משרתי מילואים ובני זוגם וצבירת חופשה (2026)',
     type: 'temporary_general_extension_order',
+    sector: 'general',
     officialNumber: null,
     publicationYear: 2026,
     industry: 'כלל המשק',
@@ -517,6 +577,7 @@ export const CATALOG: CatalogEntry[] = [
     researchId: 'COLL-016',
     name: 'עדכון שכר מינימום ענפי לעובדי ניקיון (2026)',
     type: 'sector_minimum_wage_notice',
+    sector: 'cleaning',
     officialNumber: null,
     publicationYear: 2026,
     industry: 'ניקיון ואחזקה',
@@ -537,6 +598,7 @@ export const CATALOG: CatalogEntry[] = [
     researchId: 'COLL-017',
     name: 'עדכון שכר מינימום ענפי לעובדי שמירה ואבטחה (2026)',
     type: 'sector_minimum_wage_notice',
+    sector: 'security',
     officialNumber: null,
     publicationYear: 2026,
     industry: 'שמירה ואבטחה',
@@ -545,7 +607,10 @@ export const CATALOG: CatalogEntry[] = [
     scope: 'ארצי',
     startDate: '2026-04-01',
     endDate: null,
-    history: ['לפי המאגר: עדכון מאפריל 2026 — הסכום לא חולץ ואינו מקודד'],
+    history: [
+      'לפי המאגר: עדכון מאפריל 2026 — הסכום לא חולץ ואינו מקודד',
+      'חוזר הממונה הראשית על יחסי עבודה בנושא אותר באינדקס חיפוש (calculator-work-hour/workers-rights_wage-update1426.pdf) — הקובץ לא נפתח; אין להשתמש בסכומים עד לאימות',
+    ],
     relations: [{ kind: 'updates', id: 'eo-security' }],
     sourceUrl: DIRECTORY,
     evidence: 'directory_only',
@@ -557,6 +622,7 @@ export const CATALOG: CatalogEntry[] = [
     researchId: 'COLL-018',
     name: 'צו הרחבה בענף הבנייה, התשתיות, הצמ״ה, העבודות הציבוריות והשיפוצים (2025)',
     type: 'industry_extension_order',
+    sector: 'construction',
     officialNumber: null,
     publicationYear: 2025,
     industry: 'בנייה, תשתיות, צמ״ה, עבודות ציבוריות ושיפוצים',
@@ -567,12 +633,173 @@ export const CATALOG: CatalogEntry[] = [
     excludedClasses: ['office_staff'],
     startDate: null,
     endDate: null,
-    history: ['צו 2025 רשום במאגר — יש לבדוק את השפעתו על צו 2015'],
+    history: [
+      'צו 2025 רשום במאגר — יש לבדוק את השפעתו על צו 2015',
+      'קובץ ילקוט הפרסומים 13286 (18.03.2025) אותר באינדקס חיפוש: dynamiccollectorresultitem/extension-order-building — לא נפתח',
+    ],
     relations: [{ kind: 'amends', id: 'eo-construction' }],
     sourceUrl: DIRECTORY,
     evidence: 'directory_only',
     sourceNote: `${PACK}: רשום במאגר בלבד; הנוסח לא חולץ`,
     keywords: ['בנייה', 'בניין', 'תשתיות', '2025', 'construction'],
+  }),
+  // ---- 1.1.11: official files located through a web-search index only (the files could not be opened; titles as
+  //      indexed — the exact official title, number, dates and scope are NOT verified) ----
+  meta({
+    id: 'idx-shuttle-2018',
+    researchId: null,
+    name: 'צו הרחבה בענף ההיסעים (2018)',
+    type: 'industry_extension_order',
+    sector: 'transport',
+    officialNumber: null,
+    publicationYear: 2018,
+    industry: 'היסעים (הסעות)',
+    employers: 'לפי הגדרות הצו — לא נבדק',
+    occupations: 'לפי הגדרות הצו — לא נבדק',
+    scope: 'ארצי',
+    startDate: null,
+    endDate: null,
+    sourceUrl: PDF('extension-order-shuttle-2018'),
+    evidence: 'search_index_only',
+    sourceNote: `${INDEX}: "צו הרחבה בענף ההיסעים לפי חוק הסכמים קיבוציים, התשי״ז–1957". ${NOT_OPENED}`,
+    keywords: ['היסעים', 'הסעות', 'נהגי הסעות', 'shuttle'],
+  }),
+  meta({
+    id: 'idx-garages-1995',
+    researchId: null,
+    name: 'צו הרחבה — מוסכים (ילקוט הפרסומים 4364, 1995)',
+    type: 'industry_extension_order',
+    sector: 'services',
+    officialNumber: null,
+    publicationYear: 1995,
+    industry: 'מוסכים',
+    employers: 'לפי הגדרות הצו — לא נבדק',
+    occupations: 'לפי הגדרות הצו — לא נבדק',
+    scope: 'ארצי',
+    startDate: null,
+    endDate: null,
+    history: ['לפי האינדקס: פורסם בילקוט הפרסומים 4364 (24.12.1995); הנוסח הסרוק אינו קריא באינדקס'],
+    sourceUrl: PDF('extension-order-garages'),
+    evidence: 'search_index_only',
+    sourceNote: `${INDEX} (שם הקובץ: extension-order-garages). ${NOT_OPENED}`,
+    keywords: ['מוסך', 'מוסכים', 'garage'],
+  }),
+  meta({
+    id: 'idx-wood-1973',
+    researchId: null,
+    name: 'צו הרחבה — ענף העץ (ילקוט הפרסומים 1931, 1973)',
+    type: 'industry_extension_order',
+    sector: 'industry',
+    officialNumber: null,
+    publicationYear: 1973,
+    industry: 'עץ',
+    employers: 'לפי הגדרות הצו — לא נבדק',
+    occupations: 'לפי הגדרות הצו — לא נבדק',
+    scope: 'ארצי',
+    startDate: null,
+    endDate: null,
+    history: ['מסמך היסטורי (1973) — ייתכן שהוחלף או תוקן'],
+    sourceUrl: PDF('extension-order-wood-1973'),
+    evidence: 'search_index_only',
+    sourceNote: `${INDEX}. ${NOT_OPENED}`,
+    keywords: ['עץ', 'נגרות', 'wood'],
+  }),
+  meta({
+    id: 'idx-tour-guides',
+    researchId: null,
+    name: 'צו הרחבה בענף מורי הדרך',
+    type: 'industry_extension_order',
+    sector: 'hospitality',
+    officialNumber: null,
+    publicationYear: null,
+    industry: 'תיירות — מורי דרך',
+    employers: 'לפי הגדרות הצו — לא נבדק',
+    occupations: 'מורי דרך',
+    scope: 'ארצי',
+    startDate: null,
+    endDate: null,
+    sourceUrl: PDF('extension-order-tour-guides'),
+    evidence: 'search_index_only',
+    sourceNote: `${INDEX}. ${NOT_OPENED}`,
+    keywords: ['מורה דרך', 'מורי דרך', 'תיירות', 'tour guide'],
+  }),
+  meta({
+    id: 'idx-industry-pension-2006',
+    researchId: null,
+    name: 'צו הרחבה בענף התעשייה — מסגרת לביטוח פנסיוני מקיף בתעשייה',
+    type: 'industry_extension_order',
+    sector: 'industry',
+    officialNumber: null,
+    publicationYear: 2006,
+    industry: 'תעשייה',
+    employers: 'לפי האינדקס: מעסיקים בענף התעשייה (הסכם קיבוצי כללי עם התאחדות התעשיינים, 2005) — לא נבדק',
+    occupations: 'לפי הגדרות הצו — לא נבדק',
+    scope: 'ארצי',
+    startDate: null,
+    endDate: null,
+    history: ['Hours-Cal אינה מחשבת הפרשות פנסיוניות'],
+    sourceUrl: 'https://www.gov.il/BlobFolder/dynamiccollectorresultitem/extention-order-pension-2006/he/extention-order-pension-2006.pdf',
+    evidence: 'search_index_only',
+    sourceNote: `${INDEX}. ${NOT_OPENED}`,
+    keywords: ['תעשייה', 'פנסיה', 'התאחדות התעשיינים', 'industry'],
+  }),
+  meta({
+    id: 'idx-manpower-2004',
+    researchId: null,
+    name: 'צו הרחבה בענף אספקת שירותי כוח אדם (2004)',
+    type: 'industry_extension_order',
+    sector: 'manpower',
+    officialNumber: null,
+    publicationYear: 2004,
+    industry: 'חברות כוח אדם',
+    employers: 'לפי הגדרות הצו — לא נבדק (לפי האינדקס: עובדי שירותי סיעוד מוחרגים)',
+    occupations: 'לפי הגדרות הצו — לא נבדק',
+    scope: 'ארצי',
+    startDate: null,
+    endDate: null,
+    sourceUrl: PDF('extension-order-human-resources-2004'),
+    evidence: 'search_index_only',
+    sourceNote: `${INDEX}. ${NOT_OPENED}`,
+    keywords: ['כוח אדם', 'חברת כוח אדם', 'השמה', 'manpower'],
+  }),
+  meta({
+    id: 'idx-agriculture-2000',
+    researchId: null,
+    name: 'צו הרחבה בענף החקלאות (2000) — לפי שם הקובץ',
+    type: 'industry_extension_order',
+    sector: 'agriculture',
+    officialNumber: null,
+    publicationYear: 2000,
+    industry: 'חקלאות',
+    employers: 'לפי האינדקס: עובדים בדירוג מינהלי-חודשי בחקלאות, למעט בעלי תנאים עדיפים — לא נבדק',
+    occupations: 'לפי הגדרות הצו — לא נבדק',
+    scope: 'ארצי',
+    startDate: null,
+    endDate: null,
+    sourceUrl: 'https://www.gov.il/BlobFolder/dynamiccollectorresultitem/extention-order-agriculture-gardeners-2000/he/extention-order-agriculture-gardeners-2000.pdf',
+    evidence: 'search_index_only',
+    sourceNote: `${INDEX} (שם הקובץ: extention-order-agriculture-gardeners-2000). ${NOT_OPENED}`,
+    keywords: ['חקלאות', 'חקלאי', 'גננים', 'agriculture'],
+  }),
+  meta({
+    id: 'idx-agriculture-2001',
+    researchId: null,
+    name: 'צו הרחבה בענף החקלאות (2001) — מוזכר בהנחיית משרד העבודה',
+    type: 'industry_extension_order',
+    sector: 'agriculture',
+    officialNumber: null,
+    publicationYear: 2001,
+    industry: 'חקלאות',
+    employers: 'לפי הגדרות הצו — לא נבדק',
+    occupations: 'עובדי חקלאות — לפי הגדרות הצו',
+    scope: 'ארצי',
+    startDate: null,
+    endDate: null,
+    history: ['לפי האינדקס, הנחיית משרד העבודה בעניין תשלום עבור חגים לעובדי חקלאות מפנה לסעיף 28 לצו — הצו עצמו לא אותר והסעיף לא נקרא'],
+    sourceUrl: 'https://www.gov.il/BlobFolder/reports/payment-agri-workers-4holiday/he/mikudim_payment-agricu_payment-for-holidays-agricultural-workers-hebrew.pdf',
+    evidence: 'search_index_only',
+    sourceNote: `${INDEX}: הנחיה רשמית המפנה לצו (אינה נוסח הצו). ${NOT_OPENED}`,
+    keywords: ['חקלאות', 'חגים', 'עובדים זרים', 'agriculture'],
   }),
   // ---- Entries kept from 1.1.9 that the research pack does not cover (unapproved secondary sources) ----
   {
@@ -580,6 +807,7 @@ export const CATALOG: CatalogEntry[] = [
     researchId: null,
     name: 'צו הרחבה בדבר השתתפות בהוצאות הבראה (דמי הבראה)',
     type: 'general_extension_order',
+    sector: 'general',
     officialNumber: null,
     publicationYear: null,
     industry: 'כלל המשק (מגזר פרטי)',
@@ -629,6 +857,7 @@ export const CATALOG: CatalogEntry[] = [
     researchId: null,
     name: 'צו הרחבה להסכם המסגרת (2000) — דמי חגים',
     type: 'general_extension_order',
+    sector: 'general',
     officialNumber: null,
     publicationYear: 2000,
     industry: 'כלל המשק',
@@ -648,6 +877,7 @@ export const CATALOG: CatalogEntry[] = [
     researchId: null,
     name: 'צו הרחבה לביטוח פנסיוני מקיף במשק',
     type: 'general_extension_order',
+    sector: 'general',
     officialNumber: null,
     publicationYear: 2008,
     industry: 'כלל המשק',
@@ -670,6 +900,7 @@ export const UNLISTED_ENTRY: CatalogEntry = meta({
   researchId: null,
   name: 'הסכם או צו שאינו ברשימה — לבדיקה ידנית',
   type: 'special_collective_agreement',
+  sector: 'general',
   officialNumber: null,
   publicationYear: null,
   industry: '—',
@@ -680,7 +911,7 @@ export const UNLISTED_ENTRY: CatalogEntry = meta({
   endDate: null,
   sourceUrl: MINISTRY_AGREEMENTS,
   evidence: 'directory_only',
-  sourceNote: 'הוזן ידנית — הוראותיו אינן מקודדות ולא ישפיעו על החישוב',
+  sourceNote: 'הוזן ידנית — הוראותיו אינן מקודדות בקטלוג; רק סעיפים שיוזנו מהנוסח הרשמי עם אישור תחולה מלא ישפיעו על החישוב',
   keywords: [],
 });
 
@@ -692,7 +923,7 @@ export function catalogEntry(id: string): CatalogEntry | null {
 export type CatalogStatus = 'reference_only' | 'no_full_source';
 export const CATALOG_STATUS_LABELS: Record<CatalogStatus, string> = { reference_only: 'אסמכתה בלבד', no_full_source: 'אין מקור מלא' };
 export function catalogStatus(e: CatalogEntry): CatalogStatus {
-  return e.evidence === 'directory_only' || e.evidence === 'unapproved_secondary' ? 'no_full_source' : 'reference_only';
+  return e.evidence === 'directory_only' || e.evidence === 'unapproved_secondary' || e.evidence === 'search_index_only' ? 'no_full_source' : 'reference_only';
 }
 /** The instrument has a later amendment, replacement or wage update in the catalog. */
 export function isAmended(e: CatalogEntry): boolean {
@@ -708,9 +939,9 @@ const norm = (s: string) => s.toLowerCase().replace(/["'׳״.,\-()/]/g, ' ').rep
  * Offline search by title, industry, year, registration number, source, covered worker class, research key or keyword.
  * All words must match. An optional family filter keeps extension orders, agreements and wage notices apart.
  */
-export function searchCatalog(query: string, family: InstrumentFamily | 'all' = 'all'): CatalogEntry[] {
+export function searchCatalog(query: string, family: InstrumentFamily | 'all' = 'all', sector: Sector | 'all' = 'all'): CatalogEntry[] {
   const words = norm(query).split(' ').filter(Boolean);
-  const pool = family === 'all' ? CATALOG : CATALOG.filter((e) => FAMILY_OF[e.type] === family);
+  const pool = CATALOG.filter((e) => (family === 'all' || FAMILY_OF[e.type] === family) && (sector === 'all' || e.sector === sector));
   if (!words.length) return [...pool];
   return pool.filter((e) => {
     const hay = norm(
@@ -722,6 +953,7 @@ export function searchCatalog(query: string, family: InstrumentFamily | 'all' = 
         e.employers,
         INSTRUMENT_TYPE_LABELS[e.type],
         FAMILY_LABELS[FAMILY_OF[e.type]],
+        SECTOR_LABELS[e.sector],
         e.publicationYear ? String(e.publicationYear) : '',
         e.researchId ?? '',
         e.sourceUrl,

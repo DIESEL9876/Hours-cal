@@ -7,7 +7,7 @@
  * are shown separately; the catalog is partial and the official directories can be opened from here.
  */
 import { useMemo, useState } from 'react';
-import type { AgreementClause, AgreementSelection, ClauseVerification, EmployeeClass } from '../engine';
+import type { AgreementClause, AgreementSelection, ClauseVerification, EmployeeClass, TranscribedValues } from '../engine';
 import {
   CATALOG_STATUS_LABELS,
   CATALOG_VERSION,
@@ -28,9 +28,14 @@ import {
   resolveAgreements,
   searchCatalog,
   SOURCE_LOCATED_TEXT,
+  TRANSCRIBABLE,
+  TRANSCRIBED_VERSION,
+  transcribedProblems,
   UNLISTED_ID,
   type CatalogEntry,
   type InstrumentFamily,
+  SECTOR_LABELS,
+  type Sector,
 } from '../agreements';
 import { Badge, Button, Field, Modal } from './components';
 import { formatDateHe } from './format';
@@ -42,8 +47,9 @@ export function AgreementPicker({ value, onChange, employmentStart }: { value: A
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
   const [family, setFamily] = useState<InstrumentFamily | 'all'>('all');
+  const [sector, setSector] = useState<Sector | 'all'>('all');
   const [confirming, setConfirming] = useState<AgreementSelection | null>(null);
-  const results = useMemo(() => searchCatalog(query, family), [query, family]);
+  const results = useMemo(() => searchCatalog(query, family, sector), [query, family, sector]);
   const chosen = new Set(value.map((v) => v.catalogId));
   const resolved = useMemo(() => resolveAgreements(value, today()), [value]);
 
@@ -59,6 +65,17 @@ export function AgreementPicker({ value, onChange, employmentStart }: { value: A
       {open && (
         <div className="mt-1 rounded-xl border border-line bg-white p-3 shadow-lg" data-testid="agreement-dropdown">
           <input className="field-input" autoFocus placeholder="חיפוש לפי שם ההסכם, הענף או מספר ההסכם" value={query} onChange={(e) => setQuery(e.target.value)} aria-label="חיפוש הסכם" />
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <select className="field-input !w-auto" value={sector} onChange={(e) => setSector(e.target.value as Sector | 'all')} aria-label="ענף">
+              <option value="all">כל הענפים</option>
+              {(Object.keys(SECTOR_LABELS) as Sector[]).map((k) => (
+                <option key={k} value={k}>
+                  {SECTOR_LABELS[k]}
+                </option>
+              ))}
+            </select>
+            <span className="text-[11.5px] text-ink-soft">{results.length} תוצאות</span>
+          </div>
           <div className="mt-2 flex flex-wrap gap-1" role="radiogroup" aria-label="סוג מסמך">
             {FAMILIES.map((f) => (
               <button
@@ -80,7 +97,7 @@ export function AgreementPicker({ value, onChange, employmentStart }: { value: A
                   <div>
                     <div className="font-medium">{e.name}</div>
                     <div className="text-[12px] text-ink-soft">
-                      סוג מסמך: {INSTRUMENT_TYPE_LABELS[e.type]} · מועד פרסום: {e.publicationYear ?? 'לא אומת'} · {e.officialNumber ? `מס׳ ${e.officialNumber}` : 'מספר רשמי: לא אומת'}
+                      ענף: {SECTOR_LABELS[e.sector]} · סוג מסמך: {INSTRUMENT_TYPE_LABELS[e.type]} · מועד פרסום: {e.publicationYear ?? 'לא אומת'} · {e.officialNumber ? `מס׳ ${e.officialNumber}` : 'מספר רשמי: לא אומת'}
                       {e.researchId ? ` · ${e.researchId}` : ''}
                     </div>
                     <div className="text-[12px] text-ink-soft">תחולה: {e.employers}</div>
@@ -138,7 +155,10 @@ export function AgreementPicker({ value, onChange, employmentStart }: { value: A
             const status = r?.status ?? NOT_VERIFIED_TEXT;
             return (
               <li key={sel.catalogId} className="flex flex-wrap items-center gap-2 rounded-lg bg-slate-50 px-3 py-2 text-[13px]">
-                <span className="font-medium">{e.name}</span>
+                <span className="font-medium">
+                  {sel.title ?? e.name}
+                  {sel.registrationNumber ? ` (מס׳ רישום ${sel.registrationNumber})` : ''}
+                </span>
                 <Badge tone={r?.executable ? 'green' : 'amber'}>{status}</Badge>
                 <span className="ms-auto flex gap-1">
                   <Button size="sm" variant="ghost" onClick={() => setConfirming(sel)}>
@@ -184,6 +204,9 @@ function ApplicabilityDialog({ selection, employmentStart, onClose, onSave }: { 
   const [amendments, setAmendments] = useState(!!c?.amendmentsChecked);
   const [exclusions, setExclusions] = useState(!!c?.exclusionsChecked);
   const [employerOk, setEmployerOk] = useState(!!c);
+  const [title, setTitle] = useState(selection.title ?? '');
+  const [regNo, setRegNo] = useState(selection.registrationNumber ?? '');
+  const unlisted = selection.catalogId === UNLISTED_ID;
   const clauses = profileClauses(p);
   const [cv, setCv] = useState<Record<string, { clauseRef: string; effectiveFrom: string; by: string }>>(() =>
     Object.fromEntries(
@@ -195,6 +218,7 @@ function ApplicabilityDialog({ selection, employmentStart, onClose, onSave }: { 
   );
   const draft: AgreementSelection = {
     ...selection,
+    ...(unlisted ? { title: title.trim() || undefined, registrationNumber: regNo.trim() || undefined } : {}),
     confirmation: {
       by: by.trim(),
       at: new Date().toISOString(),
@@ -212,13 +236,14 @@ function ApplicabilityDialog({ selection, employmentStart, onClose, onSave }: { 
   };
   const problems = confirmationProblems(draft, e);
   const blocked = problems.includes('סיווג העובד אינו בתחולת המכשיר לפי הגדרותיו');
-  const ready = employerOk && !!by.trim() && !!industry.trim() && !!occupation.trim() && !!employeeClass && !blocked;
+  const ready = employerOk && !!by.trim() && !!industry.trim() && !!occupation.trim() && !!employeeClass && !blocked && (!unlisted || !!title.trim());
+  const [transcribed, setTranscribed] = useState<ClauseVerification[]>(() => (selection.clauseVerifications ?? []).filter((v) => v.profileVersion === TRANSCRIBED_VERSION));
   const verifications = (): ClauseVerification[] => {
-    const kept = (selection.clauseVerifications ?? []).filter((v) => v.profileVersion !== p?.version);
+    const kept = (selection.clauseVerifications ?? []).filter((v) => v.profileVersion !== p?.version && v.profileVersion !== TRANSCRIBED_VERSION);
     const fresh = clauses
       .filter((cl) => cv[cl]?.clauseRef.trim() && cv[cl]?.effectiveFrom && cv[cl]?.by.trim())
       .map((cl) => ({ profileVersion: p!.version, clause: cl as AgreementClause, clauseRef: cv[cl].clauseRef.trim(), effectiveFrom: cv[cl].effectiveFrom, by: cv[cl].by.trim(), at: new Date().toISOString() }));
-    return [...kept, ...fresh];
+    return [...kept, ...fresh, ...transcribed];
   };
   return (
     <Modal
@@ -261,6 +286,16 @@ function ApplicabilityDialog({ selection, employmentStart, onClose, onSave }: { 
           ))}
           <div className="text-ink-soft">{e.sourceNote}</div>
         </div>
+        {unlisted && (
+          <div className="grid grid-cols-2 gap-3 rounded-lg border border-line p-3">
+            <Field label="שם ההסכם / הצו כפי שהוא רשום (חובה)">
+              <input className="field-input" value={title} onChange={(x) => setTitle(x.target.value)} aria-label="שם ההסכם" />
+            </Field>
+            <Field label="מספר רישום (פנקס ההסכמים הקיבוציים)">
+              <input className="field-input num" value={regNo} onChange={(x) => setRegNo(x.target.value)} aria-label="מספר רישום ההסכם" />
+            </Field>
+          </div>
+        )}
         <p className="text-ink-soft">בחירת מכשיר אינה הוכחה שהוא חל על העובד. יש לבדוק ולאשר:</p>
         <div className="grid grid-cols-2 gap-3">
           <Field label="ענף העסק">
@@ -338,9 +373,175 @@ function ApplicabilityDialog({ selection, employmentStart, onClose, onSave }: { 
             ))}
           </div>
         ) : (
-          <div className="rounded-lg bg-slate-50 p-3 text-ink-soft">אין במכשיר זה סעיפי חישוב מקודדים — הוא מוצג לעיון בלבד ואינו משפיע על החישוב.</div>
+          <div className="rounded-lg bg-slate-50 p-3 text-ink-soft">אין במכשיר זה סעיפי חישוב מקודדים בקטלוג.</div>
         )}
+        <TranscribedClauses list={transcribed} onChange={setTranscribed} />
       </div>
     </Modal>
+  );
+}
+
+const DAY_NAMES = ['ראשון', 'שני', 'שלישי', 'רביעי', 'חמישי', 'שישי', 'שבת'];
+const toHM = (m: number) => `${Math.floor(m / 60)}:${String(m % 60).padStart(2, '0')}`;
+function parseHM(s: string): number | null {
+  const m = /^(\d{1,2}):(\d{2})$/.exec(s.trim());
+  if (!m || +m[2] > 59) return null;
+  return +m[1] * 60 + +m[2];
+}
+const pctOf = (s: string) => (/^\d{1,3}$/.test(s.trim()) ? +s.trim() : NaN);
+
+function describe(c: ClauseVerification): string {
+  const v = c.values ?? {};
+  switch (c.clause) {
+    case 'hours':
+      return v.hours ? `ימים: ${v.hours.dailyThresholdMinutes.map(toHM).join(' / ')} · שבוע ${toHM(v.hours.weeklyThresholdMinutes)} · מדרגה ראשונה ${toHM(v.hours.firstTierMinutes)}` : '';
+    case 'overtime_rates':
+      return v.overtimeRates ? `${v.overtimeRates.tier1Percent}% / ${v.overtimeRates.tier2Percent}%` : '';
+    case 'rest_holiday_rates':
+      return v.restHolidayRates ? `מנוחה ${v.restHolidayRates.restPercent}% · חג ${v.restHolidayRates.holidayPercent}%` : '';
+    case 'night_premium':
+      return v.nightPremium ? `משעה ${toHM(v.nightPremium.startMinute)} עד ${toHM(v.nightPremium.endMinute)} · תוספת ${v.nightPremium.percent}%` : '';
+    case 'minimum_wage':
+      return v.minimumHourlyAgorot ? `₪${(v.minimumHourlyAgorot / 100).toFixed(2)} לשעה` : '';
+    default:
+      return '';
+  }
+}
+
+/**
+ * 1.1.11: a payroll professional transcribes a calculation clause from the OFFICIAL text (clause reference, effective
+ * dates, values). It is applied only together with a complete applicability confirmation; values below the statute
+ * are rejected; two instruments for the same domain block each other.
+ */
+function TranscribedClauses({ list, onChange }: { list: ClauseVerification[]; onChange: (l: ClauseVerification[]) => void }) {
+  const [clause, setClause] = useState<AgreementClause>('overtime_rates');
+  const [ref, setRef] = useState('');
+  const [from, setFrom] = useState('');
+  const [to, setTo] = useState('');
+  const [by, setBy] = useState('');
+  const [copied, setCopied] = useState(false);
+  const [f, setF] = useState<Record<string, string>>({ t1: '125', t2: '150', rest: '150', hol: '150', ns: '22:00', ne: '06:00', np: '', min: '', week: '42:00', tier: '2:00', d0: '8:36', d1: '8:36', d2: '8:36', d3: '8:36', d4: '7:36', d5: '0:00', d6: '0:00' });
+  const set = (k: string, v: string) => setF({ ...f, [k]: v });
+  const values = (): TranscribedValues => {
+    switch (clause) {
+      case 'hours':
+        return { hours: { dailyThresholdMinutes: [0, 1, 2, 3, 4, 5, 6].map((i) => parseHM(f[`d${i}`]) ?? -1), weeklyThresholdMinutes: parseHM(f.week) ?? -1, firstTierMinutes: parseHM(f.tier) ?? -1 } };
+      case 'overtime_rates':
+        return { overtimeRates: { tier1Percent: pctOf(f.t1), tier2Percent: pctOf(f.t2) } };
+      case 'rest_holiday_rates':
+        return { restHolidayRates: { restPercent: pctOf(f.rest), holidayPercent: pctOf(f.hol) } };
+      case 'night_premium':
+        return { nightPremium: { startMinute: parseHM(f.ns) ?? -1, endMinute: parseHM(f.ne) ?? -1, percent: pctOf(f.np) } };
+      case 'minimum_wage': {
+        const n = Number(f.min.replace(',', '.'));
+        return { minimumHourlyAgorot: Number.isFinite(n) && n > 0 ? Math.round(n * 100) : NaN };
+      }
+      default:
+        return {};
+    }
+  };
+  const problems = transcribedProblems(clause, values());
+  const ready = copied && !!ref.trim() && !!from && !!by.trim() && (!to || to >= from) && problems.length === 0;
+  const input = (k: string, label: string, w = 'w-20') => (
+    <Field label={label}>
+      <input className={`field-input num ${w} text-left`} value={f[k]} onChange={(e) => set(k, e.target.value)} aria-label={label} />
+    </Field>
+  );
+  return (
+    <div className="rounded-lg border border-line p-3" data-testid="transcribed-clauses">
+      <div className="font-medium">סעיפי חישוב שהוזנו מהנוסח הרשמי</div>
+      <p className="text-[12px] text-ink-soft">
+        לשימוש איש/אשת מקצוע שקרא/ה את הנוסח הרשמי: מזינים את מספר הסעיף, תוקפו והערכים כפי שהם מופיעים בנוסח. הסעיף ישפיע על החישוב רק לאחר אישור תחולה מלא. ערכים נמוכים מהחוק נדחים; שני מכשירים לאותו נושא — אף אחד לא יוחל.
+      </p>
+      {list.length > 0 && (
+        <ul className="my-2 space-y-1">
+          {list.map((c, i) => (
+            <li key={i} className="flex flex-wrap items-center gap-2 rounded bg-slate-50 px-2 py-1 text-[12.5px]" data-testid="transcribed-clause">
+              <b>{CLAUSE_LABELS[c.clause]}</b>
+              <span>{describe(c)}</span>
+              <span className="text-ink-soft">
+                {c.clauseRef} · {c.effectiveFrom}
+                {c.effectiveTo ? `–${c.effectiveTo}` : ''} · {c.by}
+              </span>
+              <Button size="sm" variant="ghost" className="ms-auto text-red-600" onClick={() => onChange(list.filter((_, j) => j !== i))}>
+                הסרה
+              </Button>
+            </li>
+          ))}
+        </ul>
+      )}
+      <div className="mt-2 grid grid-cols-4 gap-2">
+        <Field label="סוג הסעיף">
+          <select className="field-input" value={clause} onChange={(e) => setClause(e.target.value as AgreementClause)} aria-label="סוג הסעיף">
+            {TRANSCRIBABLE.map((c) => (
+              <option key={c} value={c}>
+                {CLAUSE_LABELS[c]}
+              </option>
+            ))}
+          </select>
+        </Field>
+        <Field label="סעיף בנוסח הרשמי">
+          <input className="field-input" value={ref} onChange={(e) => setRef(e.target.value)} aria-label="מספר הסעיף" />
+        </Field>
+        <Field label="חל מתאריך">
+          <input type="date" className="field-input num" value={from} onChange={(e) => setFrom(e.target.value)} aria-label="סעיף חל מתאריך" />
+        </Field>
+        <Field label="עד תאריך (לא חובה)">
+          <input type="date" className="field-input num" value={to} onChange={(e) => setTo(e.target.value)} aria-label="סעיף חל עד תאריך" />
+        </Field>
+      </div>
+      <div className="mt-2 flex flex-wrap items-end gap-2">
+        {clause === 'overtime_rates' && (
+          <>
+            {input('t1', 'מדרגה ראשונה (%)')}
+            {input('t2', 'מדרגה שנייה (%)')}
+          </>
+        )}
+        {clause === 'rest_holiday_rates' && (
+          <>
+            {input('rest', 'מנוחה שבועית (%)')}
+            {input('hol', 'חג (%)')}
+          </>
+        )}
+        {clause === 'night_premium' && (
+          <>
+            {input('ns', 'משעה')}
+            {input('ne', 'עד שעה')}
+            {input('np', 'תוספת (%)')}
+          </>
+        )}
+        {clause === 'minimum_wage' && input('min', 'שכר מינימום ענפי לשעה (₪)', 'w-28')}
+        {clause === 'hours' && (
+          <>
+            {DAY_NAMES.map((d, i) => input(`d${i}`, d, 'w-16'))}
+            {input('week', 'תקן שבועי')}
+            {input('tier', 'מדרגת 125%')}
+          </>
+        )}
+      </div>
+      <div className="mt-2 grid grid-cols-2 gap-2">
+        <Field label="הוזן ונבדק על ידי">
+          <input className="field-input" value={by} onChange={(e) => setBy(e.target.value)} aria-label="מזין הסעיף" />
+        </Field>
+        <label className="flex items-end gap-2 pb-2">
+          <input type="checkbox" className="h-4 w-4 accent-brand" checked={copied} onChange={(e) => setCopied(e.target.checked)} aria-label="הערכים הועתקו מהנוסח הרשמי" />
+          <span>הערכים הועתקו מהנוסח הרשמי של הסעיף, בתוקף לתקופה שצוינה</span>
+        </label>
+      </div>
+      {problems.length > 0 && <div className="mt-1 text-[12px] text-amber-800">{problems.join('; ')}</div>}
+      <Button
+        size="sm"
+        className="mt-2"
+        disabled={!ready}
+        data-testid="add-transcribed-clause"
+        onClick={() => {
+          onChange([...list, { profileVersion: TRANSCRIBED_VERSION, clause, clauseRef: ref.trim(), effectiveFrom: from, effectiveTo: to || null, by: by.trim(), at: new Date().toISOString(), values: values() }]);
+          setRef('');
+          setCopied(false);
+        }}
+      >
+        הוספת הסעיף
+      </Button>
+    </div>
   );
 }

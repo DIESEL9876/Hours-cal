@@ -11,6 +11,7 @@ import { closingRules, computeBusinessMonth, extraEmployeeInput, snapshotOf } fr
 import { defaultEmployeeSettings, type ShiftInput } from '../../engine';
 import { buildTimestamps } from '../../ui/timeEntry';
 import type { BackupInfo } from '../driver';
+import { CATALOG_VERSION } from '../../agreements';
 
 const SQL = await initSqlJs();
 
@@ -103,8 +104,30 @@ describe('closed months keep the rule set they were closed with', () => {
 
     // Closed by 1.1.10: the rule set and registry version are recorded and used.
     const rules = await closingRules(repo, b.id, 2026, 11);
-    expect(rules).toMatchObject({ youthRuleSet: 'Y2', legalRegistryVersion: '2026.11.04', catalogVersion: '2026.11.04' });
+    expect(rules).toMatchObject({ youthRuleSet: 'Y2', legalRegistryVersion: '2026.11.04', catalogVersion: CATALOG_VERSION });
     await repo.setMonthReview(b.id, '2026-11', 'final', { json: '{}', hash: 'h' }, null, rules);
     expect(snapshotOf(await computeBusinessMonth(repo, b.id, 2026, 11))).toBe(snapshotOf(openMonth));
+  });
+});
+
+describe('1.1.11 — verified clauses never rewrite a closed month', () => {
+  it('a clause verified after the month was closed is ignored for that month; open months use it', async () => {
+    const repo = await open();
+    const { b, e } = await setup(repo, null);
+    await repo.upsertShift(b.id, e.id, shift('2026-11-02', '08:00', '19:00', 0));
+    const [v] = await repo.getSettingsVersions(e.id);
+    const conf = { by: 'מנהלת השכר', at: '2026-11-01', industry: 'הסעדה', occupation: 'טבח', employmentStart: null, employeeClass: 'other' as const, fullTextReviewed: true, amendmentsChecked: true, exclusionsChecked: true };
+    const clause = (at: string) => ({ profileVersion: 'transcribed', clause: 'overtime_rates' as const, clauseRef: 'סעיף 7', effectiveFrom: '2026-01-01', by: 'רו"ח', at, values: { overtimeRates: { tier1Percent: 150, tier2Percent: 200 } } });
+    const withClause = (at: string) => ({ ...v.settings, hourlyRateAgorot: 5000, agreements: [{ catalogId: 'coll-006', confirmation: conf, clauseVerifications: [clause(at)] }] });
+
+    await repo.saveSettingsVersion(b.id, e.id, v.effectiveFrom, { ...v.settings, hourlyRateAgorot: 5000 }, { authorizeRetroactive: true });
+    const plain = (await computeBusinessMonth(repo, b.id, 2026, 11)).rows[0].totals.payAgorot!;
+    await repo.setMonthReview(b.id, '2026-11', 'final', { json: '{}', hash: 'h' }, null, await closingRules(repo, b.id, 2026, 11));
+    // Verified later (timestamp after the close): the closed month is unchanged.
+    await repo.saveSettingsVersion(b.id, e.id, v.effectiveFrom, withClause('2099-01-01T00:00:00.000Z'), { authorizeRetroactive: true });
+    expect((await computeBusinessMonth(repo, b.id, 2026, 11)).rows[0].totals.payAgorot).toBe(plain);
+    // Reopened: the verified clause applies.
+    await repo.setMonthReview(b.id, '2026-11', 'open', null, null, null);
+    expect((await computeBusinessMonth(repo, b.id, 2026, 11)).rows[0].totals.payAgorot!).toBeGreaterThan(plain);
   });
 });

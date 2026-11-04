@@ -20,7 +20,7 @@ import {
   type YouthRuleSet,
 } from '../engine';
 import { Repository, toDayStatuses, type Employee } from './repo';
-import { agreementHoursFor, resolveAgreements, rulesSnapshot } from '../agreements';
+import { agreementHoursFor, agreementPayFor, resolveAgreements, rulesSnapshot } from '../agreements';
 import { monthFinancials, resolveTravel, sumFinancials, type MonthFinancials } from '../payroll/financials';
 
 /**
@@ -44,12 +44,18 @@ export async function extraEmployeeInput(repo: Repository, businessId: string, e
     }
     youthRuleSet = recorded === 'Y2' ? 'Y2' : 'Y1';
   }
+  // A clause verified after a month was closed never changes that closed month (1.1.11).
+  const selections = (settings?.agreements ?? []).map((sel) =>
+    review.status === 'final' && review.finalizedAt ? { ...sel, clauseVerifications: (sel.clauseVerifications ?? []).filter((c) => c.at <= review.finalizedAt!) } : sel,
+  );
+  const pay = agreementPayFor(selections, from, to);
   return {
     birthDate: employee.birthDate ?? null,
     youth: employee.youth ?? null,
     youthRuleSet,
+    agreementPay: pay.rules,
     paidDayOverrides: month.paidDayOverride ? [{ ym, minutes: month.paidDayOverride.minutes, reason: month.paidDayOverride.reason }] : [],
-    agreementHours: agreementHoursFor(settings?.agreements, from, to),
+    agreementHours: agreementHoursFor(selections, from, to),
   };
 }
 
