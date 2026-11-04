@@ -486,6 +486,13 @@ export function PayrollItemsDialog({ business, employee, ym, onClose, onChanged 
                 </Button>
               )}
             </div>
+            {rules!.reviews
+              .filter((r) => r.includes('הבראה'))
+              .map((r) => (
+                <p key={r} className="mt-1 text-[12px] text-amber-800">
+                  {r}
+                </p>
+              ))}
             <p className="mt-1 text-[12px] text-ink-soft">{recup.rule.note} דמי הבראה אינם משולמים בהכרח בכל חודש — הסכום נרשם רק לאחר אישור.</p>
           </section>
         )}

@@ -15,6 +15,7 @@ under the Israeli Hours of Work and Rest framework. Full Hebrew RTL interface.
 | [`docs/LEGAL_RULES.md`](docs/LEGAL_RULES.md) | Every rule applied, its source, verification status/date, and the exact algorithm |
 | [`docs/REVIEW_CASES.md`](docs/REVIEW_CASES.md) | Exceptional cases that require human payroll review (with flag codes) |
 | [`docs/USER_GUIDE_HE.md`](docs/USER_GUIDE_HE.md) | Short Hebrew user guide |
+| [`docs/RELEASE_1.1.9_REPORT.md`](docs/RELEASE_1.1.9_REPORT.md) | 1.1.9: calculation verification, legal sources, agreements coverage, rules needing professional review, data-survival confirmation |
 | [`docs/LICENSE_MANAGER_GUIDE_HE.md`](docs/LICENSE_MANAGER_GUIDE_HE.md) | Hebrew guide for the owner-only License Manager (key setup, issuing, registry, backups, go-live) |
 
 ## Architecture
@@ -80,7 +81,7 @@ Cross-compiling the NSIS installer from Linux also works (this is how the provid
 ```bash
 rustup target add x86_64-pc-windows-gnu && sudo apt install mingw-w64 nsis
 npx tauri build --target x86_64-pc-windows-gnu --bundles nsis
-# → src-tauri/target/x86_64-pc-windows-gnu/release/bundle/nsis/Hours-Cal_1.0.0_x64-setup.exe
+# → src-tauri/target/x86_64-pc-windows-gnu/release/bundle/nsis/Hours-Cal_<version>_x64-setup.exe
 #   (contains hours-cal.exe, WebView2Loader.dll and an uninstaller)
 ```
 
@@ -162,6 +163,31 @@ Nothing is written until the user approves; the approved rows are then saved in 
   - The new figures stay out of the finalisation snapshot, so finalised months keep their hash.
   - The weekly credit is off for existing businesses and applies only after the last finalised month.
 - **Tests:** `src/engine/__tests__/absence.test.ts`, `src/data/__tests__/absence.test.ts`, `src/import/__tests__/categories.test.ts`, `e2e/absence.spec.ts`.
+
+## Payroll preparation (since 1.1.9)
+
+Rules and sources: `docs/LEGAL_RULES.md` §11. Verification and coverage: `docs/RELEASE_1.1.9_REPORT.md`.
+
+- **Paid absence day value** (`src/engine/absence.ts`):
+  - Methods: manual hours/day, average of the current month, or average of the 3 complete prior months (net worked minutes ÷ distinct worked dates).
+  - Money value = hourly rate × equivalent hours. Monthly employees get no extra value. Reserve duty is never valued hourly.
+  - "אין מספיק נתונים לחישוב ממוצע" instead of a default. Per-month override with a reason.
+- **Youth** (`src/engine/youth.ts`):
+  - Optional date of birth; age is evaluated per attendance date.
+  - Checks: daily and weekly limits, overtime ban, night, weekly rest, break, minimum wage.
+  - Warnings only. Minutes are never removed.
+- **Payroll components** (`src/data/repo.ts`, `src/payroll/financials.ts`, `ui/screens/PayrollItems.tsx`):
+  - The "רכיבי שכר נוספים" button sits next to "פתיחת דוח שעות".
+  - Categories: advance, bonus, recuperation, reserve, other. Stored per employee and month in integer agorot.
+  - Audited, idempotent, read-only in closed months.
+- **Travel:** none / monthly / per eligible day (distinct worked dates), inherited from the business, with a manual day correction.
+- **Agreements** (`src/agreements/`):
+  - Partial offline catalog with metadata and verification level.
+  - Rules apply only with an applicability confirmation AND a verified profile version. Precedence is handled.
+  - The rule versions used are stored when a month is closed.
+- **Outputs:** totals bar, business monthly summary columns, Excel ("רכיבי שכר" sheet), CSV (appended table), print.
+- **Data:** migration v3 is additive (`employees.birth_date`, `monthly_adjustments`, `employee_months`, `month_reviews.rules_json`). A pre-migration backup is taken first.
+- **Tests:** `src/engine/__tests__/payroll119.test.ts`, `src/data/__tests__/payroll119.test.ts`, `e2e/payroll.spec.ts`.
 
 ## Licensing and legal agreement (since 1.1.3)
 

@@ -67,7 +67,9 @@ export function resolveAgreements(selections: AgreementSelection[] | undefined, 
     if (!profile || !inForce) continue;
     if (profile.hours && executable) hoursCandidates.push({ entry, profile });
     if (profile.recuperation) {
-      const rule = profile.recuperation.find((r) => date >= r.yearFrom && date <= r.yearTo) ?? profile.recuperation[profile.recuperation.length - 1];
+      const inYear = profile.recuperation.find((r) => date >= r.yearFrom && date <= r.yearTo);
+      const rule = inYear ?? profile.recuperation[profile.recuperation.length - 1];
+      if (!inYear) out.reviews.push(`תעריף יום ההבראה ${(rule.dayValueAgorot / 100).toFixed(2)} ₪ הוא האחרון שפורסם בקטלוג (לשנת ההבראה שהסתיימה ב-${rule.yearTo}); יש לבדוק אם פורסם תעריף חדש`);
       if (!out.recuperation || rule.dayValueAgorot > out.recuperation.rule.dayValueAgorot) {
         if (out.recuperation) out.reviews.push('כמה מקורות קובעים דמי הבראה — הוצג הערך המיטיב; יש לבדוק שאין מניעה לשלב ביניהם');
         out.recuperation = { rule, source: entry.name, executable };

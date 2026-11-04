@@ -179,7 +179,7 @@ export const CATALOG: CatalogEntry[] = [
       {
         version: '2026',
         effectiveFrom: '2025-07-01',
-        effectiveTo: '2026-06-30',
+        effectiveTo: null, // the order is open-ended; only the day rate is updated yearly (see rules.ts fallback review)
         verification: 'secondary',
         covers: ['recuperation'],
         recuperation: [

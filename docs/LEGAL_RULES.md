@@ -2,7 +2,7 @@
 
 **Document date:** 2026-10-08
 **Applies to engine version:** 1.1.0 (`src/engine/`)
-**Change log:** 1.1.0 (2026-10-08) — office policy: five-day daily threshold 8:24 (rule 3.3). 1.1.6 — Friday policy (4.7). 1.1.7 (2026-11-03) — actual vs. paid attendance, vacation, sickness, holidays, election days (section 10).
+**Change log:** 1.1.0 (2026-10-08) — office policy: five-day daily threshold 8:24 (rule 3.3). 1.1.6 — Friday policy (4.7). 1.1.7 (2026-11-03) — actual vs. paid attendance, vacation, sickness, holidays, election days (section 10). 1.1.9 (2026-11-04) — paid-day value, youth employment, travel, recuperation, reserve duty, agreements catalog, payroll components (section 11).
 **Status:** rules cross-checked against secondary sources only — see "Verification status" below.
 
 This file documents every rule the calculation engine applies, where it comes from, how confident we are,
@@ -241,3 +241,95 @@ week's regular allowance, so later work in the same week (including Friday under
 reaches the weekly threshold earlier. Credited minutes are never classified as overtime and are never added to
 actual hours. Default: on for new businesses, **off** for existing ones (identical results to 1.1.6); a change
 applies from the month after the last finalised month.
+
+## 11. Payroll preparation: paid-day value, youth employment, travel, recuperation, reserve duty, agreements (since 1.1.9)
+
+### 11.1 Verification status for this section
+
+| Source | Attempted | Result |
+|---|---|---|
+| חוק עבודת הנוער, התשי"ג-1953 (main.knesset.gov.il, legislation database) | 2026-11-03 | **Not accessible** — DNS for `main.knesset.gov.il` is outside the session's network policy (ENOTFOUND). |
+| gov.il (Ministry of Labor extension-order collection, travel-expenses order PDF, recuperation order) | 2026-11-03 | **Not accessible** — `www.gov.il` blocked by the egress proxy. |
+| btl.gov.il (reserve-duty benefit), kolzchut.org.il | 2026-11-03 | **Not fetched directly** (kolzchut: host not resolvable); figures taken from web-search result snippets quoting these sites. |
+| Web search (secondary sources) | 2026-11-03 | Consistent figures found — youth: tep.haifa.ac.il, meyda.education.gov.il, malam-payroll.com, workrights.co.il, kolzchut (snippets), protocol.co.il, koloved.net; minimum wage: chamber.org.il, heshevavoda.co.il, teen.kolzchut.org.il, minimum.org.il; travel: bizportal.co.il, hilan.co.il, malam-payroll.com, kolhamas.co.il (one source — yael-sachar.com — still quotes 25.20 ₪); recuperation: hashavim.co.il, taxcollege.co.il, bizportal.co.il, malam-payroll.com, law-firm summaries; reserve duty: btl.gov.il and kolzchut snippets, jobcalc.co.il, malam-payroll.com. |
+
+**Nothing in this section is marked as verified against the official text.** Agreement profiles carry
+`verification: 'secondary'` and are never executed automatically (11.7). To verify, allow `main.knesset.gov.il`,
+`www.gov.il`, `www.btl.gov.il` and `www.kolzchut.org.il` in the environment's network settings, or have a payroll
+professional check the texts and record it in the app (11.7.4).
+
+### 11.2 Paid absence day value — "שיטת חישוב לפי הגדרת העסק" (O)
+
+| # | Rule |
+|---|---|
+| 11.2.1 | Settings section "חישוב ערך יום היעדרות בתשלום": manual hours per day (decimal `8.40` = 8:24, or `8:24`), or automatic average — current month, or the three complete calendar months before the month. Stored in the existing `paidDayReference` / `paidDayMinutes` settings (`'average_month'` added); inheritance business → employee unchanged. |
+| 11.2.2 | Average = actual net worked minutes ÷ distinct dates with net work > 0 (two shifts on one date = one day), rounded half-up to the minute. Absence equivalents are never part of the average (no circular calculation). |
+| 11.2.3 | No worked day in the reference period → "אין מספיק נתונים לחישוב ממוצע": nominal 0, the day is flagged — **no silent 8.4-hour default**. A per-month manual override with a mandatory reason is kept next to the calculated value (`employee_months`, audited). |
+| 11.2.4 | Money value (only when an hourly rate exists) = `round_half_up(hourly rate agorot × equivalent minutes ÷ 60)` — equivalent minutes already include the payment fraction. Integer agorot, summed per day. |
+| 11.2.5 | Monthly salary type → `in_salary`, value 0: the absence is paid within the monthly salary (no double pay). |
+| 11.2.6 | Hourly/daily vacation and holiday days carry a review note: the statutory vacation pay of an hourly worker is based on the pay of the reference period (Annual Leave Law §10 — 3 months ÷ 90 × calendar days, per secondary sources), so the business method is an estimate that **never replaces a higher statutory entitlement**. (S for the statutory statement; O for the method.) |
+| 11.2.7 | Reserve duty days are never valued at an hourly rate: basis `statutory_formula` (11.6). |
+
+### 11.3 Youth employment (חוק עבודת הנוער) — `src/engine/youth.ts`
+
+Age is computed per attendance date from the optional date of birth (birthday inclusive → 18 on the birthday).
+Without a date of birth adult rules apply provisionally and **no age is guessed**; the legacy "minor" legal
+profile without a date of birth is flagged for review. Checks are warnings only — recorded minutes are never
+removed; overtime classification and pay keep the general law (a minor who worked overtime is still owed the pay —
+workrights / case-law summaries); remuneration of a day with a youth violation is flagged "דורש בדיקה".
+
+| Rule | Code | Status |
+|---|---|---|
+| Employment age: not below 15 (exceptions: from 14 in school holidays, artistic work by permit) | YOUTH_MIN_AGE | S |
+| 8 hours a day; from 16 in a five-day week up to 9; 7 hours on the eve of the weekly rest / a holiday | YOUTH_DAILY_LIMIT | S |
+| 40 hours a week | YOUTH_WEEKLY_LIMIT | S |
+| Overtime prohibited — any minute beyond the youth daily limit is flagged; pay unchanged | YOUTH_PAY_REVIEW | S |
+| Night: under 16 — 20:00–08:00; from 16 — 22:00–06:00 (permit exceptions not modelled → review) | YOUTH_NIGHT | S |
+| Weekly rest: no work on the weekly rest day; holiday work flagged | YOUTH_REST_DAY, YOUTH_HOLIDAY | S |
+| Break: after 6 hours, 45 minutes (at least 30 continuous) | YOUTH_BREAK | S |
+| Minimum hourly wage for youth from 2026-04-01: adult monthly 6,443.85 ₪ × 70% / 75% / 83% ÷ 173 → under 16: 26.07 ₪, 16: 27.94 ₪, 17: 30.92 ₪. Checked only when an hourly rate exists and only within the listed period; otherwise review. | YOUTH_MIN_WAGE | S |
+
+Snapshot stability: youth warnings are produced only when a date of birth exists, so months finalised before 1.1.9
+(no date of birth stored) keep their hash.
+
+### 11.4 Travel expenses (צו הרחבה בדבר השתתפות המעביד בהוצאות נסיעה)
+
+| Rule | Status |
+|---|---|
+| Settings "החזר הוצאות נסיעה": none / fixed monthly amount / amount per eligible day (NIS, stored in agorot); employee inherits the business unless set. | O |
+| Eligible days = dates with actual net work > 0 (two shifts = one day; vacation, sickness, holiday without work excluded); per-month manual override with mandatory reason. | O |
+| Cap: actual travel cost up to a daily maximum — 22.60 ₪ for 2026 per several secondary sources (one older page: 25.20 ₪). The cap is **not enforced** (no effective-dated primary text). Every configured travel method shows the note "make sure the amount is not below the actual travel cost up to the cap (or a more favourable arrangement)" — possible underpayment; "no reimbursement" with worked days in the month is flagged for review (eligibility under the order); a method without an amount is flagged. | S / I |
+
+### 11.5 Recuperation pay (צו הרחבה בדבר השתתפות בהוצאות הבראה)
+
+| Rule | Status |
+|---|---|
+| Days by completed seniority: 1st year 5; 2–3: 6; 4–10: 7; 11–15: 8; 16–19: 9; 20+: 10; none before one completed year; part-time pro rata. | S |
+| Day rate 451.50 ₪ for recuperation year 2026 (1.7.2025–30.6.2026; order published 18.8.2026, including a top-up for payments made at 418 ₪). After 30.6.2026 the last published rate is shown with a review note ("check whether a new rate was published"). | S |
+| The app shows a **suggestion only**; an amount is recorded only when the user saves it as a component. Payment timing (annual/monthly) is not assumed. | O |
+
+### 11.6 Reserve duty (מילואים)
+
+| Rule | Status |
+|---|---|
+| The NII benefit = gross income of the 3 months before service ÷ 90 × service days, floor 328.76 ₪/day, ceiling 1,730.33 ₪/day (btl / kolzchut snippets). The employer pays and is reimbursed. **Not computed** by the app (needs wage history); never valued at an hourly rate. | S |
+| Components keep the kinds separate: wage during service, NII reimbursement to the employer (not a gross addition), additional amount payable to the employee, manual. | O |
+| A reserve day is counted as a paid-absence day (1.1.7 rules); its value basis is `statutory_formula` with a review note. | O |
+
+### 11.7 Collective agreements and extension orders — `src/agreements/`
+
+| # | Rule |
+|---|---|
+| 11.7.1 | Offline catalog (version `2026.11.03`), searchable by name, industry or number. Each entry stores type, industry, employers, occupations, scope, official number (null when not verified), start/end dates, history, source URL, source note, last-verified date and verification level (`primary` / `secondary` / `metadata_only`). The catalog is **partial** — see the coverage report. |
+| 11.7.2 | Selection is per employee and is reference only. Rules execute only when (a) an applicability confirmation exists (industry, occupation, employment start, confirmer, explicit checkbox) **and** (b) the rule profile is `primary`, or a named professional recorded verification of that exact profile version. Otherwise the UI shows "הוראות ההסכם טרם אומתו". |
+| 11.7.3 | Precedence: statute < general extension order < industry extension order < general collective agreement < special collective agreement. A rule from an instrument can only make the result more favourable; conflicting values are flagged (e.g. two recuperation rates → the higher is shown with a review). |
+| 11.7.4 | Executable hours rules (daily/weekly thresholds, first-tier minutes) are supported by the engine through `agreementHours`, with effective dates; **no catalog entry currently carries hours rules** (the mechanism is tested with a synthetic profile). |
+| 11.7.5 | Closing a month stores the rule-profile versions used (`month_reviews.rules_json`). |
+
+### 11.8 Monthly payroll components (O)
+
+Table `monthly_adjustments` (migration v3): one row per component, bound to employee + business + `YYYY-MM`;
+categories advance / bonus / recuperation / reserve / other; amounts in integer agorot (≥ 0); treatment
+(gross addition / advance / employer reimbursement / informational); details JSON (advance proposed recovery,
+authorised deduction + authorisation basis; reserve kind); soft delete; every change audited; a caller-supplied id
+makes saving idempotent (no duplicate posting); finalised months are read-only. Money never changes hours.
