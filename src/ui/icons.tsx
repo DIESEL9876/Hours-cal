@@ -37,3 +37,4 @@ export const IconHistory = (p: P) => base(p, <><path d="M3 12a9 9 0 1 0 3-6.7L3 
 export const IconBook = (p: P) => base(p, <><path d="M4 5a2 2 0 0 1 2-2h14v16H6a2 2 0 0 0-2 2V5z" /><path d="M4 19a2 2 0 0 1 2-2h14" /></>);
 export const IconLock = (p: P) => base(p, <><rect x="5" y="11" width="14" height="10" rx="2" /><path d="M8 11V8a4 4 0 0 1 8 0v3" /></>);
 export const IconCalendar = (p: P) => base(p, <><rect x="3.5" y="5" width="17" height="15.5" rx="2" /><path d="M3.5 10h17M8 3v4M16 3v4" /></>);
+export const IconCoins = (p: P) => base(p, <><ellipse cx="9" cy="7" rx="5" ry="2.5" /><path d="M4 7v4c0 1.4 2.2 2.5 5 2.5s5-1.1 5-2.5V7" /><path d="M10 15.6c.9.3 1.9.4 3 .4 2.8 0 5-1.1 5-2.5V9.5c0-1.4-2.2-2.5-5-2.5" /><path d="M4 11v4c0 1.4 2.2 2.5 5 2.5" /></>);

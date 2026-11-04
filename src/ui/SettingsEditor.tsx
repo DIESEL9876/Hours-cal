@@ -6,12 +6,15 @@ import {
   ISRAELI_CITIES,
   SIX_DAY_WORKDAYS,
   type AbsenceSettings,
+  type PaidDayReference,
+  type TravelSettings,
   type CustomProfile,
   type EmployeeSettings,
   type FridayOvertimePolicy,
   type Weekday,
 } from '../engine';
 import { Checkbox, Field, Segmented, Select } from './components';
+import { AgreementPicker } from './AgreementPicker';
 import { BREAK_METHOD_LABELS, PROFILE_LABELS } from './format';
 
 const WEEKDAYS: Weekday[] = [0, 1, 2, 3, 4, 5, 6];
@@ -73,6 +76,7 @@ export const ABSENCE_SETTING_OPTIONS: Record<AbsenceField, { label: string; opti
       { value: 'auto', label: 'אוטומטי (חודשי: מערכת שעות; שעתי/יומי: ממוצע 3 חודשים)' },
       { value: 'schedule', label: 'לפי מערכת השעות של העובד' },
       { value: 'average_3m', label: 'ממוצע יומי ב-3 החודשים הקודמים' },
+      { value: 'average_month', label: 'ממוצע יומי בחודש הנוכחי' },
       { value: 'fixed', label: 'מספר שעות קבוע' },
     ],
   },
@@ -120,7 +124,8 @@ export const ABSENCE_SETTING_OPTIONS: Record<AbsenceField, { label: string; opti
   },
 };
 
-const ABSENCE_FIELDS = Object.keys(ABSENCE_SETTING_OPTIONS) as AbsenceField[];
+// The paid-day value has its own section (1.1.9) — see PaidDaySection.
+const ABSENCE_FIELDS = (Object.keys(ABSENCE_SETTING_OPTIONS) as AbsenceField[]).filter((f) => f !== 'paidDayReference');
 const optionLabel = (f: AbsenceField, v: string | undefined) => ABSENCE_SETTING_OPTIONS[f].options.find((o) => o.value === v)?.label ?? '';
 
 function AbsenceSection({
@@ -140,8 +145,6 @@ function AbsenceSection({
     for (const k of Object.keys(next) as (keyof AbsenceSettings)[]) if (next[k] === undefined || next[k] === '' || next[k] === 'inherit') delete next[k];
     onChange(next);
   };
-  const ownRef = a.paidDayReference && a.paidDayReference !== 'inherit' ? a.paidDayReference : undefined;
-  const effectiveRef = ownRef ?? (scope === 'employee' ? businessAbsence.paidDayReference : undefined);
   return (
     <div className="grid grid-cols-3 gap-3" data-testid="absence-settings">
       {ABSENCE_FIELDS.map((f) => {
@@ -160,14 +163,142 @@ function AbsenceSection({
           </Field>
         );
       })}
-      {effectiveRef === 'fixed' && (
-        <Field label="שעות ליום משולם (ש:דד)">
-          <MinutesInput value={a.paidDayMinutes ?? businessAbsence.paidDayMinutes ?? 504} min={1} onChange={(v) => set({ paidDayMinutes: v })} />
-        </Field>
-      )}
       {scope === 'employee' && (
         <Field label="תחילת העבודה" hint="לבדיקת ותק לדמי חג וליום בחירות">
           <input type="date" className="field-input num" value={a.employmentStart ?? ''} aria-label="תאריך תחילת העבודה" onChange={(e) => set({ employmentStart: e.target.value || undefined })} />
+        </Field>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Value of a paid absence day (1.1.9)
+// ---------------------------------------------------------------------------
+
+const PAID_DAY_MAIN: { value: string; label: string }[] = [
+  { value: 'schedule', label: 'לפי מתכונת העבודה של העובד' },
+  { value: 'fixed', label: 'הזנה ידנית של שעות ליום' },
+  { value: 'average', label: 'חישוב אוטומטי לפי ממוצע שעות עבודה' },
+];
+
+/** "8.40" (decimal) or "8:24" → minutes. */
+function hoursToMinutes(raw: string): number | null {
+  const t = raw.trim();
+  const m = /^(\d{1,2}):([0-5]\d)$/.exec(t);
+  if (m) return +m[1] * 60 + +m[2];
+  if (/^\d{1,2}([.,]\d{1,2})?$/.test(t)) return Math.round(Number(t.replace(',', '.')) * 60);
+  return null;
+}
+
+function PaidDaySection({ value, onChange, scope, businessAbsence }: { value: AbsenceSettings; onChange: (a: AbsenceSettings) => void; scope: 'business' | 'employee'; businessAbsence: AbsenceSettings }) {
+  const own = value.paidDayReference && value.paidDayReference !== 'inherit' ? value.paidDayReference : undefined;
+  const biz = (businessAbsence.paidDayReference as PaidDayReference | undefined) ?? 'auto';
+  const set = (patch: Partial<AbsenceSettings>) => {
+    const next: AbsenceSettings = { ...value, ...patch };
+    for (const k of Object.keys(next) as (keyof AbsenceSettings)[]) if (next[k] === undefined) delete next[k];
+    onChange(next);
+  };
+  const effective = own ?? (scope === 'employee' ? biz : 'auto');
+  const main = own === undefined ? (scope === 'employee' ? 'inherit' : 'auto') : own === 'average_3m' || own === 'average_month' ? 'average' : own;
+  const [text, setText] = useState(value.paidDayMinutes ? (value.paidDayMinutes / 60).toFixed(2) : '');
+  const label = (r: PaidDayReference) =>
+    r === 'auto' ? 'אוטומטי לפי סוג העסקה' : r === 'fixed' ? 'הזנה ידנית' : r === 'average_month' ? 'ממוצע בחודש הנוכחי' : r === 'average_3m' ? 'ממוצע ב-3 החודשים הקודמים' : 'לפי מתכונת העבודה';
+  const options = [
+    ...(scope === 'employee' ? [{ value: 'inherit', label: `לפי הגדרת העסק (${label(biz)})` }] : [{ value: 'auto', label: 'אוטומטי לפי סוג העסקה (חודשי: מתכונת עבודה; שעתי/יומי: ממוצע 3 חודשים)' }]),
+    ...PAID_DAY_MAIN,
+  ];
+  return (
+    <div className="grid grid-cols-3 gap-3" data-testid="paid-day-settings">
+      <Field label="שיטה">
+        <Select<string>
+          value={main}
+          onChange={(v) =>
+            set(
+              v === 'inherit' || v === 'auto'
+                ? { paidDayReference: undefined }
+                : v === 'average'
+                  ? { paidDayReference: own === 'average_month' ? 'average_month' : 'average_3m' }
+                  : { paidDayReference: v as PaidDayReference },
+            )
+          }
+          options={options}
+          aria-label="שיטת חישוב ערך יום היעדרות"
+        />
+      </Field>
+      {main === 'average' && (
+        <Field label="תקופת הממוצע" hint="שעות עבודה נטו בפועל ÷ מספר ימי העבודה בפועל (לא ימי לוח)">
+          <Select<string>
+            value={own === 'average_month' ? 'average_month' : 'average_3m'}
+            onChange={(v) => set({ paidDayReference: v as PaidDayReference })}
+            options={[
+              { value: 'average_month', label: 'ממוצע שעות עבודה בחודש הנוכחי' },
+              { value: 'average_3m', label: 'ממוצע שעות עבודה בשלושת החודשים הקודמים' },
+            ]}
+            aria-label="תקופת הממוצע"
+          />
+        </Field>
+      )}
+      {main === 'fixed' && (
+        <Field label="שעות ליום (עשרוני או ש:דד)" hint={value.paidDayMinutes ? `${Math.floor(value.paidDayMinutes / 60)}:${String(value.paidDayMinutes % 60).padStart(2, '0')} שעות` : 'לדוגמה 8.40 = 8 שעות ו-24 דקות'}>
+          <input
+            className="field-input num text-left"
+            value={text}
+            placeholder="8.40"
+            aria-label="שעות ליום"
+            onChange={(e) => {
+              setText(e.target.value);
+              const m = hoursToMinutes(e.target.value);
+              if (m && m > 0 && m <= 24 * 60) set({ paidDayMinutes: m });
+            }}
+          />
+        </Field>
+      )}
+      {(effective === 'average_3m' || effective === 'average_month') && (
+        <p className="col-span-3 text-[12px] text-ink-soft">
+          כשאין ימי עבודה בתקופה יוצג "אין מספיק נתונים לחישוב ממוצע" — ללא ערך ברירת מחדל. ניתן להזין ערך ידני לחודש עם נימוק ב"רכיבי שכר נוספים".
+        </p>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Travel reimbursement (1.1.9)
+// ---------------------------------------------------------------------------
+
+function TravelField({ value, onChange, scope, business }: { value: TravelSettings | undefined; onChange: (t: TravelSettings) => void; scope: 'business' | 'employee'; business?: TravelSettings }) {
+  const mode = value?.mode ?? (scope === 'employee' ? 'inherit' : 'none');
+  const [amount, setAmount] = useState(value?.amountAgorot ? (value.amountAgorot / 100).toFixed(2) : '');
+  const bizText = !business || business.mode === 'inherit' || business.mode === 'none' ? 'ללא החזר נסיעות' : `${business.mode === 'monthly' ? 'סכום חודשי' : 'לכל יום'} ₪${((business.amountAgorot ?? 0) / 100).toFixed(2)}`;
+  return (
+    <div className="col-span-2 grid grid-cols-2 gap-3" data-testid="travel-settings">
+      <Field label="החזר הוצאות נסיעה" hint="ימי זכאות ברירת מחדל: ימי עבודה בפועל (לא חופשה, מחלה או חג ללא עבודה). שתי משמרות באותו יום = יום אחד.">
+        <Select<string>
+          value={mode}
+          onChange={(v) => onChange({ mode: v as TravelSettings['mode'], amountAgorot: value?.amountAgorot ?? null })}
+          options={[
+            ...(scope === 'employee' ? [{ value: 'inherit', label: `לפי הגדרת העסק (${bizText})` }] : []),
+            { value: 'none', label: 'ללא החזר נסיעות' },
+            { value: 'monthly', label: 'סכום חודשי קבוע' },
+            { value: 'daily', label: 'סכום לכל יום זכאי' },
+          ]}
+          aria-label="החזר הוצאות נסיעה"
+        />
+      </Field>
+      {(mode === 'monthly' || mode === 'daily') && (
+        <Field label={mode === 'monthly' ? 'סכום לחודש (₪)' : 'סכום ליום (₪)'} hint="לפי צו ההרחבה: עלות הנסיעה בפועל עד תקרה יומית (2026: 22.60 ₪ לפי מקורות משניים) — יש לבדוק">
+          <input
+            className="field-input num text-left"
+            inputMode="decimal"
+            value={amount}
+            aria-label="סכום החזר נסיעות"
+            onChange={(e) => {
+              setAmount(e.target.value);
+              const m = /^(\d{1,6})(?:\.(\d{1,2}))?$/.exec(e.target.value.trim());
+              if (m) onChange({ mode, amountAgorot: +m[1] * 100 + (m[2] ? +m[2].padEnd(2, '0') : 0) });
+            }}
+          />
         </Field>
       )}
     </div>
@@ -180,6 +311,8 @@ export function SettingsEditor({
   scope = 'employee',
   businessFriday = 'none',
   businessAbsence = {},
+  businessTravel,
+  employmentStart,
 }: {
   value: EmployeeSettings;
   onChange: (s: EmployeeSettings) => void;
@@ -189,6 +322,9 @@ export function SettingsEditor({
   businessFriday?: FridayOvertimePolicy;
   /** Business absence defaults (shown next to "לפי הגדרת העסק"). */
   businessAbsence?: AbsenceSettings;
+  /** Business travel default (shown next to "לפי הגדרת העסק"). */
+  businessTravel?: TravelSettings;
+  employmentStart?: string | null;
 }) {
   const s = value;
   const set = (patch: Partial<EmployeeSettings>) => onChange({ ...s, ...patch });
@@ -218,7 +354,12 @@ export function SettingsEditor({
           onChange={(v) => set({ legalProfile: v, customProfile: v === 'custom_contract' ? custom : s.customProfile })}
           options={(Object.keys(PROFILE_LABELS) as EmployeeSettings['legalProfile'][]).map((k) => ({ value: k, label: PROFILE_LABELS[k] }))}
         />
-        {s.legalProfile === 'minor' && <p className="mt-2 text-[12px] text-red-700">חוק עבודת הנוער קובע הגבלות שונות. המערכת תציג שעות נטו בלבד ותסמן את הדוח כשגוי עד לטיפול ידני.</p>}
+        {s.legalProfile === 'minor' && <p className="mt-2 text-[12px] text-red-700">חוק עבודת הנוער קובע הגבלות שונות. כשמוזן תאריך לידה בפרטי העובד, כללי הנוער נבדקים לפי הגיל בכל תאריך עבודה; בלעדיו המערכת תציג שעות נטו בלבד ותסמן את הדוח כשגוי.</p>}
+        {scope === 'employee' && (
+          <div className="mt-3" data-testid="agreements">
+            <AgreementPicker value={s.agreements ?? []} onChange={(agreements) => set({ agreements })} employmentStart={employmentStart ?? s.absence?.employmentStart ?? null} />
+          </div>
+        )}
         {s.legalProfile === 'exempt' && <p className="mt-2 text-[12px] text-amber-700">יש לוודא שהעובד אכן מוחרג מהחוק (למשל משרת הנהלה או משרה הדורשת מידה מיוחדת של אמון). השעות יוצגו ללא סיווג לשעות נוספות.</p>}
         {s.legalProfile === 'custom_contract' && (
           <div className="mt-4 rounded-xl border border-line bg-slate-50/60 p-4">
@@ -428,6 +569,7 @@ export function SettingsEditor({
               }}
             />
           </Field>
+          <TravelField value={s.travel} onChange={(travel) => set({ travel })} scope={scope} business={businessTravel} />
           <Field label="סף אזהרה למנוחה בין משמרות (שעות)" hint="אזהרה משרדית – לא כלל חוקי כללי שאומת">
             <input
               type="number"
@@ -451,6 +593,10 @@ export function SettingsEditor({
             <Checkbox checked={s.restMinutesCountTowardWeekly} onChange={(v) => set({ restMinutesCountTowardWeekly: v })} label="שעות במנוחה/חג נספרות במכסת 42 השעות השבועית" />
           </div>
         </div>
+      </Section>
+
+      <Section title="חישוב ערך יום היעדרות בתשלום" note="כמה שעות מייצג יום היעדרות מלא בתשלום (חופשה, מחלה, חג, בחירות). ההערכה הכספית = שכר שעתי × שעות × שיעור התשלום. זו שיטת חישוב לפי הגדרת העסק ואינה מחליפה זכאות חוקית גבוהה יותר.">
+        <PaidDaySection value={s.absence ?? {}} onChange={(absence) => set({ absence })} scope={scope} businessAbsence={businessAbsence} />
       </Section>
 
       <Section

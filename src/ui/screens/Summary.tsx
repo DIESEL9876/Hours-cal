@@ -1,7 +1,8 @@
 import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
 import { dedupeWarnings, formatDays, formatDecimalHours, premiumMinutes, type AttendanceTotals, type BusinessSummary, type BusinessSummaryRow, type PeriodTotals } from '../../engine';
 import type { Business, MonthReview } from '../../data/repo';
-import { computeBusinessMonth, sha256Hex, snapshotOf, yearMonthKey } from '../../data/service';
+import { closingRules, computeBusinessFinancials, computeBusinessMonth, sha256Hex, snapshotOf, yearMonthKey } from '../../data/service';
+import { shekelsText, type MonthFinancials } from '../../payroll/financials';
 import { Crumbs, useApp } from '../App';
 import { Badge, Button, Card, Checkbox, DECIMAL_HOURS_LABEL, DECIMAL_HOURS_TITLE, DecimalHours, PageHeader, severityLabel, severityTone, useUi } from '../components';
 import { IconAlert, IconCheck, IconChevronLeft, IconDownload, IconLock, IconPrinter, IconSearch } from '../icons';
@@ -78,6 +79,18 @@ function AttendanceCells({ a, total = false }: { a: AttendanceTotals; total?: bo
   );
 }
 
+type BizTotals = Awaited<ReturnType<typeof computeBusinessFinancials>>['totals'];
+/** Payroll-preparation columns (₪) — kept apart from all hour columns (1.1.9). */
+const PAY_COLUMNS: [string, (t: BizTotals) => number, (f: MonthFinancials) => number][] = [
+  ['ערך היעדרויות (הערכה)', (t) => t.absenceEstimateAgorot, (f) => f.absenceEstimateAgorot],
+  ['נסיעות', (t) => t.travelAgorot, (f) => f.travel.totalAgorot],
+  ['בונוס', (t) => t.byCategory.bonus, (f) => f.byCategory.bonus],
+  ['דמי הבראה', (t) => t.byCategory.recuperation, (f) => f.byCategory.recuperation],
+  ['מילואים', (t) => t.byCategory.reserve, (f) => f.byCategory.reserve],
+  ['תוספות אחרות', (t) => t.byCategory.other, (f) => f.byCategory.other],
+  ['מקדמות', (t) => t.byCategory.advance, (f) => f.byCategory.advance],
+];
+
 const REVIEW_LABEL: Record<MonthReview['status'], string> = { open: 'פתוח לעריכה', in_review: 'בבדיקה', final: 'נסגר לאחר בדיקה' };
 
 export function SummaryScreen({ businessId }: { businessId: string }) {
@@ -85,6 +98,7 @@ export function SummaryScreen({ businessId }: { businessId: string }) {
   const ui = useUi();
   const [business, setBusiness] = useState<Business | null>(null);
   const [summary, setSummary] = useState<BusinessSummary | null>(null);
+  const [fin, setFin] = useState<Awaited<ReturnType<typeof computeBusinessFinancials>> | null>(null);
   const [review, setReview] = useState<MonthReview | null>(null);
   const [currentHash, setCurrentHash] = useState<string | null>(null);
   const [query, setQuery] = useState('');
@@ -99,6 +113,7 @@ export function SummaryScreen({ businessId }: { businessId: string }) {
     const [b, s, rev] = await Promise.all([repo.getBusiness(businessId), computeBusinessMonth(repo, businessId, ym.year, ym.month), repo.getMonthReview(businessId, key)]);
     setBusiness(b);
     setSummary(s);
+    setFin(await computeBusinessFinancials(repo, businessId, ym.year, ym.month, s));
     setReview(rev);
     setCurrentHash(await sha256Hex(snapshotOf(s)));
     setAckReview(false);
@@ -146,7 +161,7 @@ export function SummaryScreen({ businessId }: { businessId: string }) {
       // Safety backup at finalisation.
       await repo.driver.createBackup('finalize').catch(() => undefined);
     }
-    await repo.setMonthReview(businessId, key, status, snap);
+    await repo.setMonthReview(businessId, key, status, snap, null, status === 'final' ? await closingRules(repo, businessId, ym.year, ym.month) : null);
     ui.toast(status === 'final' ? 'החודש נסגר. נשמרה תמונת מצב וגיבוי.' : `סטטוס החודש: ${REVIEW_LABEL[status]}`);
     load();
   };
@@ -161,7 +176,9 @@ export function SummaryScreen({ businessId }: { businessId: string }) {
   );
 
   const doExport = (f: 'xlsx' | 'csv') =>
-    exportBusinessMonth(f, business, summary, ym, statusLine)
+    repo
+      .listAdjustments(businessId, key)
+      .then((items) => exportBusinessMonth(f, business, summary, ym, statusLine, fin, items))
       .then((m) => m && ui.toast(m))
       .catch((e) => ui.toast(String(e), 'error'));
 
@@ -249,6 +266,11 @@ export function SummaryScreen({ businessId }: { businessId: string }) {
                 {header('sick', 'ימי מחלה')}
                 {header('hol', 'ימי חג')}
                 {header('elec', 'ימי בחירות')}
+                {PAY_COLUMNS.map(([label], i) => (
+                  <th key={label} className={`whitespace-nowrap px-3 py-2.5 font-medium ${i === 0 ? 'border-s border-line' : ''}`} title="רכיבי שכר (₪) — אינם שעות עבודה">
+                    {label}
+                  </th>
+                ))}
                 {includePay && <th className="px-3 py-2.5 font-medium">הערכת עלות</th>}
                 <th className="px-3 py-2.5 font-medium">פריטים פתוחים</th>
               </tr>
@@ -261,13 +283,14 @@ export function SummaryScreen({ businessId }: { businessId: string }) {
                     number={r.employeeNumber}
                     t={r.totals}
                     a={r.result.attendance}
+                    f={fin?.byEmployee.get(r.employeeId) ?? null}
                     includePay={includePay}
                     expanded={expanded === r.employeeId}
                     onToggle={() => setExpanded(expanded === r.employeeId ? null : r.employeeId)}
                   />
                   {expanded === r.employeeId && (
                     <tr className="bg-slate-50/50">
-                      <td colSpan={includePay ? 17 : 16} className="px-6 py-4">
+                      <td colSpan={(includePay ? 17 : 16) + PAY_COLUMNS.length} className="px-6 py-4">
                         <EmployeeDetail row={r} onOpen={() => go({ name: 'attendance', businessId, employeeId: r.employeeId })} />
                       </td>
                     </tr>
@@ -298,6 +321,11 @@ export function SummaryScreen({ businessId }: { businessId: string }) {
                   <DecimalHours minutes={g.netMinutes} testid="dec-net" />
                 </td>
                 <AttendanceCells a={summary.attendanceTotal} total />
+                {PAY_COLUMNS.map(([label, pick]) => (
+                  <td key={label} className="num px-3 py-3 text-right" data-testid={`grand-pay-${label}`}>
+                    {fin ? shekelsText(pick(fin.totals)) : '—'}
+                  </td>
+                ))}
                 {includePay && <td className="num px-3 py-3 text-right">{shekels(g.payAgorot)}</td>}
                 <td className="px-3 py-3 text-[12px] font-normal">{issuesText(g) || '—'}</td>
               </tr>
@@ -376,6 +404,7 @@ function SummaryRow({
   number,
   t,
   a,
+  f,
   includePay,
   expanded,
   onToggle,
@@ -384,6 +413,7 @@ function SummaryRow({
   number: string | null;
   t: PeriodTotals;
   a: AttendanceTotals;
+  f: MonthFinancials | null;
   includePay: boolean;
   expanded: boolean;
   onToggle: () => void;
@@ -427,6 +457,11 @@ function SummaryRow({
         <DecimalHours minutes={t.netMinutes} testid="dec-net" />
       </td>
       <AttendanceCells a={a} />
+      {PAY_COLUMNS.map(([label, , pickOne]) => (
+        <td key={label} className="num px-3 py-3 text-right text-[13px]">
+          {f ? (pickOne(f) ? shekelsText(pickOne(f)) : '–') : '–'}
+        </td>
+      ))}
       {includePay && <td className="num px-3 py-3 text-right">{shekels(t.payAgorot)}</td>}
       <td className="px-3 py-3">{issues ? <Badge tone={t.errorCount || t.unconfirmedBreaks ? 'red' : 'amber'}>{issues}</Badge> : <Badge tone="green">תקין לבדיקה</Badge>}</td>
     </tr>

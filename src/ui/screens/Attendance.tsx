@@ -34,6 +34,10 @@ import { MonthPicker } from '../MonthPicker';
 import { formatDateHe, hm, monthTitle, shekels, STATUS_LABELS, STATUS_OPTIONS } from '../format';
 import { buildTimestamps, normalizeTimeInput, parseBreakInput } from '../timeEntry';
 import { exportEmployeeMonth } from '../../export/exporters';
+import { extraEmployeeInput } from '../../data/service';
+import type { EmployeeMonthData, MonthlyAdjustment } from '../../data/repo';
+import { monthFinancials, resolveTravel, shekelsText, type MonthFinancials } from '../../payroll/financials';
+import { resolveAgreements } from '../../agreements';
 import { COPYRIGHT } from '../../licensing/CopyrightFooter';
 import { AttendanceImportDialog } from './AttendanceImport';
 import { ACCEPT as IMPORT_ACCEPT } from '../../import';
@@ -72,6 +76,10 @@ export function AttendanceScreen({ businessId, employeeId }: { businessId: strin
   const [undo, setUndo] = useState<Op[]>([]);
   const [redo, setRedo] = useState<Op[]>([]);
   const [importFile, setImportFile] = useState<File | null>(null);
+  /** 1.1.9: date of birth, monthly paid-day value, verified agreement hours; monthly payroll components. */
+  const [extra, setExtra] = useState<Awaited<ReturnType<typeof extraEmployeeInput>> | null>(null);
+  const [payItems, setPayItems] = useState<MonthlyAdjustment[]>([]);
+  const [monthData, setMonthData] = useState<EmployeeMonthData>({});
   const fileInput = useRef<HTMLInputElement>(null);
   const { from, to } = monthRange(ym.year, ym.month);
   // Weekly range + look-back for sickness periods and 3-month averages (same as the service layer).
@@ -90,6 +98,14 @@ export function AttendanceScreen({ businessId, employeeId }: { businessId: strin
       repo.getDayEntries(businessId, employeeId, range.from, range.to),
       repo.listCustomHolidays(businessId),
     ]);
+    const [x, items, md] = await Promise.all([
+      extraEmployeeInput(repo, businessId, e, vs, from, to),
+      repo.listAdjustments(businessId, from.slice(0, 7), employeeId),
+      repo.getEmployeeMonth(businessId, employeeId, from.slice(0, 7)),
+    ]);
+    setExtra(x);
+    setPayItems(items);
+    setMonthData(md);
     setBusiness(b);
     setEmployee(e);
     setVersions(vs);
@@ -97,7 +113,7 @@ export function AttendanceScreen({ businessId, employeeId }: { businessId: strin
     setEntries(en);
     setHolidays(hol);
     setLoaded(true);
-  }, [repo, businessId, employeeId, range]);
+  }, [repo, businessId, employeeId, range, from, to]);
 
   useEffect(() => {
     setLoaded(false);
@@ -120,8 +136,15 @@ export function AttendanceScreen({ businessId, employeeId }: { businessId: strin
       businessFriday: business ? businessFridayHistory(business.defaults) : undefined,
       businessAbsence: business ? businessAbsenceDefaults(business.defaults) : undefined,
       historyFrom: range.from,
+      ...(extra ?? {}),
     });
-  }, [loaded, versions, shifts, entries, holidays, employeeId, from, to, business, range]);
+  }, [loaded, versions, shifts, entries, holidays, employeeId, from, to, business, range, extra]);
+
+  const financials = useMemo(() => {
+    if (!result || !business) return null;
+    const settings = resolveSettings(versions, to)?.settings ?? null;
+    return monthFinancials(result, payItems, resolveTravel(settings, business.defaults), monthData, resolveAgreements(settings?.agreements, to));
+  }, [result, business, versions, to, payItems, monthData]);
 
   // ------------------------------------------------------------- persistence
   const applyShift = useCallback(
@@ -336,10 +359,10 @@ export function AttendanceScreen({ businessId, employeeId }: { businessId: strin
                 אישור {unconfirmed.length} הפסקות משוערות
               </Button>
             )}
-            <Button icon={<IconDownload size={16} />} onClick={() => exportEmployeeMonth('xlsx', business, employee, result, ym).then((m) => m && ui.toast(m)).catch((e) => ui.toast(String(e), 'error'))}>
+            <Button icon={<IconDownload size={16} />} onClick={() => exportEmployeeMonth('xlsx', business, employee, result, ym, financials ? { f: financials, items: payItems } : null).then((m) => m && ui.toast(m)).catch((e) => ui.toast(String(e), 'error'))}>
               Excel
             </Button>
-            <Button icon={<IconDownload size={16} />} onClick={() => exportEmployeeMonth('csv', business, employee, result, ym).then((m) => m && ui.toast(m)).catch((e) => ui.toast(String(e), 'error'))}>
+            <Button icon={<IconDownload size={16} />} onClick={() => exportEmployeeMonth('csv', business, employee, result, ym, financials ? { f: financials, items: payItems } : null).then((m) => m && ui.toast(m)).catch((e) => ui.toast(String(e), 'error'))}>
               CSV
             </Button>
             <Button icon={<IconPrinter size={16} />} onClick={() => window.print()}>
@@ -433,6 +456,14 @@ export function AttendanceScreen({ businessId, employeeId }: { businessId: strin
           ...(hasPay ? [{ label: 'הערכת עלות (לא תלוש)', value: shekels(t.payAgorot) }] : []),
         ]}
         attendance={att}
+        financials={financials}
+        ageNote={
+          employee.birthDate
+            ? result.age?.youthDays
+              ? `עובד מתחת לגיל 18 ב-${result.age.youthDays} ימי עבודה — כללי חוק עבודת הנוער נבדקו${result.age.turns18 ? ` (מלאו 18 ב-${formatDateHe(result.age.turns18)})` : ''}`
+              : null
+            : 'לא הוזן תאריך לידה — הסיווג לפי גיל אינו מאומת (חלים כללי עובד בגיר)'
+        }
         flags={[
           { label: 'הפסקות לא מאושרות', count: t.unconfirmedBreaks, tone: 'amber' as const, onClick: () => setDetailsDate(firstIssueDate((w) => w.code === 'BREAK_UNCONFIRMED')) },
           { label: 'רישומים חסרים', count: t.incompleteEntries, tone: 'red' as const, onClick: () => setDetailsDate(firstIssueDate((w) => w.code === 'INCOMPLETE' || w.code === 'MISSING_RECORD')) },
@@ -892,10 +923,14 @@ function TotalsBar({
   items,
   flags,
   attendance,
+  financials,
+  ageNote,
 }: {
   items: { label: string; value: string; strong?: boolean; testid?: string; decimalMinutes?: number; legend?: boolean }[];
   flags: { label: string; count: number; tone: 'amber' | 'red' | 'violet'; onClick: () => void }[];
   attendance: AttendanceTotals;
+  financials: MonthFinancials | null;
+  ageNote: string | null;
 }) {
   const visible = flags.filter((f) => f.count > 0);
   const a = attendance;
@@ -972,7 +1007,33 @@ function TotalsBar({
         {dayItem('ימי בחירות', a.electionDayHundredths, 'total-election-days')}
         {a.unpaidDayHundredths > 0 && dayItem('ללא תשלום', a.unpaidDayHundredths, 'total-unpaid-days')}
         {a.weeklyCreditMinutes > 0 && hourItem('זיכוי לתקן השבועי', a.weeklyCreditMinutes, 'total-weekly-credit')}
+        {ageNote && <div className="ms-auto self-center text-[11px] text-ink-soft" data-testid="age-note">{ageNote}</div>}
       </div>
+      {financials && (financials.count > 0 || financials.travel.totalAgorot > 0 || financials.absenceEstimateAgorot > 0) && (
+        <div className="mx-auto flex max-w-[1600px] flex-wrap items-start gap-x-6 gap-y-1 border-t border-line/60 px-6 py-2" data-testid="payroll-totals-bar">
+          <div className="min-w-0 self-center border-e border-line pe-4 text-[11px] font-medium text-ink-soft" title="סכומים לצורך הכנת שכר בלבד — אינם שעות עבודה ואינם תלוש שכר">
+            רכיבי שכר (₪)
+          </div>
+          {[
+            ['הערכת ערך היעדרויות', financials.absenceEstimateAgorot, 'pay-absence'],
+            ['נסיעות', financials.travel.totalAgorot, 'pay-travel'],
+            ['בונוס', financials.byCategory.bonus, 'pay-bonus'],
+            ['דמי הבראה', financials.byCategory.recuperation, 'pay-recuperation'],
+            ['מילואים', financials.byCategory.reserve, 'pay-reserve'],
+            ['תוספות אחרות', financials.byCategory.other, 'pay-other'],
+            ['מקדמות', financials.byCategory.advance, 'pay-advance'],
+          ]
+            .filter(([, v]) => (v as number) > 0)
+            .map(([label, v, id]) => (
+              <div key={id as string} className="min-w-0">
+                <div className="text-[11px] text-ink-soft">{label as string}</div>
+                <div className="num text-right text-[14px] font-semibold text-ink" data-testid={id as string}>
+                  {shekelsText(v as number)}
+                </div>
+              </div>
+            ))}
+        </div>
+      )}
     </div>
   );
 }

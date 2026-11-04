@@ -55,7 +55,12 @@ describe('additive migration v1 → v2', () => {
     const m1 = MIGRATIONS.find((m) => m.version === 1)!;
     await v1.driver.batch([...m1.statements.map((sql) => ({ sql })), { sql: `INSERT INTO schema_migrations VALUES (1, 'initial schema', '2026-01-01')` }]);
     const b = await v1.createBusiness({ name: 'ישן', defaults: defaultEmployeeSettings({ breakMethod: 'manual' }) });
-    const e = await v1.createEmployee(b.id, { fullName: 'א', settings: b.defaults });
+    // Employee rows exactly as the v1 schema stores them (no later columns).
+    const e = { id: 'e-v1' };
+    await v1.driver.batch([
+      { sql: `INSERT INTO employees (id, business_id, full_name, employee_number, notes, created_at, updated_at) VALUES ('e-v1', ?, 'א', NULL, NULL, 't', 't')`, params: [b.id] },
+      { sql: `INSERT INTO employee_settings (id, employee_id, effective_from, settings_json, created_at, updated_at) VALUES ('v-v1', 'e-v1', '1900-01-01', ?, 't', 't')`, params: [JSON.stringify(b.defaults)] },
+    ]);
     await v1.upsertShift(b.id, e.id, shift('2026-10-12', '08:00', '17:00', 30));
     await v1.driver.batch([
       {

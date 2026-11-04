@@ -6,7 +6,9 @@ import type { Business, Employee } from '../data/repo';
 import { isTauri } from '../data/tauriDriver';
 import { monthTitle } from '../ui/format';
 import { COPYRIGHT } from '../licensing/CopyrightFooter';
-import { businessDetailTable, businessMonthTable, employeeMonthTable, type Cell, type Table } from './tables';
+import { businessDetailTable, businessMonthTable, employeeMonthTable, payrollItemsTable, type Cell, type Table } from './tables';
+import type { MonthlyAdjustment } from '../data/repo';
+import type { MonthFinancials } from '../payroll/financials';
 
 export type ExportFormat = 'xlsx' | 'csv';
 
@@ -150,7 +152,10 @@ export async function saveBytes(fileName: string, bytes: Uint8Array, mime: strin
 
 async function emit(format: ExportFormat, baseName: string, tables: Table[], meta: { title: string; subtitle: string }) {
   if (format === 'csv') {
-    const bytes = new TextEncoder().encode(tableToCsv(tables[0]));
+    // Payroll components (1.1.9) follow the main table in the same CSV file, after a blank line and their title.
+    let text = tableToCsv(tables[0]);
+    for (const t of tables.slice(1).filter((x) => x.csvAppend)) text += `\r\n${t.title}\r\n` + tableToCsv(t).replace(/^\uFEFF/, '');
+    const bytes = new TextEncoder().encode(text);
     return saveBytes(`${safeName(baseName)}.csv`, bytes, 'text/csv;charset=utf-8');
   }
   const bytes = await tablesToXlsx(tables, meta);
@@ -169,10 +174,13 @@ export async function exportEmployeeMonth(
   employee: Employee,
   result: EmployeePeriodResult,
   ym: { year: number; month: number },
+  pay: { f: MonthFinancials; items: MonthlyAdjustment[] } | null = null,
 ): Promise<string | null> {
   const title = `דוח שעות - ${employee.fullName} - ${monthTitle(ym.year, ym.month)}`;
   const table = employeeMonthTable('דוח שעות', result);
-  return emit(format, title, [table], { title, subtitle: generatedLine(business.name) });
+  const tables = [table];
+  if (pay && (pay.items.length || pay.f.travel.totalAgorot || pay.f.absenceEstimateAgorot)) tables.push({ ...payrollItemsTable('רכיבי שכר', [{ name: employee.fullName, number: employee.employeeNumber ?? '', ...pay }]), csvAppend: true });
+  return emit(format, title, tables, { title, subtitle: generatedLine(business.name) });
 }
 
 export async function exportBusinessMonth(
@@ -181,10 +189,19 @@ export async function exportBusinessMonth(
   summary: BusinessSummary,
   ym: { year: number; month: number },
   statusLine: string,
+  fin: Parameters<typeof businessMonthTable>[3] = null,
+  items: MonthlyAdjustment[] = [],
 ): Promise<string | null> {
   const title = `סיכום שעות עובדים - ${monthTitle(ym.year, ym.month)} - ${business.name}`;
   const includePay = summary.rows.some((r) => r.totals.payAgorot !== null);
-  const tables = [businessMonthTable('סיכום', summary, includePay), businessDetailTable('פירוט יומי', summary)];
+  const tables = [businessMonthTable('סיכום', summary, includePay, fin), businessDetailTable('פירוט יומי', summary)];
+  if (fin) {
+    const pay = payrollItemsTable(
+      'רכיבי שכר',
+      summary.rows.map((r) => ({ name: r.name, number: r.employeeNumber ?? '', f: fin.byEmployee.get(r.employeeId)!, items: items.filter((a) => a.employeeId === r.employeeId) })).filter((x) => x.f),
+    );
+    tables.push({ ...pay, csvAppend: true });
+  }
   return emit(format, title, tables, { title, subtitle: `${generatedLine(business.name)} · ${statusLine}` });
 }
 

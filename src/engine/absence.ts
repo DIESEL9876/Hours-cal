@@ -66,6 +66,8 @@ export function emptyDayAttendance(netMinutes: number, category: DayStatusKind |
     payableEquivalentMinutes: netMinutes,
     paidDayHundredths: worked ? 100 : 0,
     paidAbsenceDayHundredths: 0,
+    estimatedValueAgorot: 0,
+    valueBasis: 'none',
     sickDayIndex: null,
     sickBalanceDeductionHundredths: 0,
     basis: 'none',
@@ -91,6 +93,8 @@ export function emptyAttendanceTotals(): AttendanceTotals {
     electionDayHundredths: 0,
     unpaidDayHundredths: 0,
     reviewDays: 0,
+    estimatedAbsenceValueAgorot: 0,
+    reserveDayHundredths: 0,
   };
 }
 
@@ -118,6 +122,8 @@ export function sumAttendance(days: DayAttendance[]): AttendanceTotals {
     if (d.category === 'holiday') t.holidayDayHundredths += d.absenceDayHundredths;
     if (d.category === 'election') t.electionDayHundredths += d.absenceDayHundredths;
     if (d.category === 'unpaid') t.unpaidDayHundredths += d.absenceDayHundredths;
+    if (d.category === 'reserve') t.reserveDayHundredths += d.absenceDayHundredths;
+    t.estimatedAbsenceValueAgorot += d.estimatedValueAgorot;
     if (d.basis === 'review') t.reviewDays++;
   }
   return t;
@@ -162,6 +168,20 @@ export function absenceHistoryFrom(from: LocalDate): LocalDate {
   return a < b ? a : b;
 }
 
+/** Actual worked time over a reference period: net minutes (after deductible breaks) of distinct worked dates only. */
+export interface DayAverage {
+  from: LocalDate;
+  to: LocalDate;
+  /** Distinct dates with net worked time > 0 (two shifts on a date = one day; absence-only dates excluded). */
+  days: number;
+  /** Total actual net minutes (never absence equivalents — no circular averaging). */
+  workedMinutes: number;
+  /** workedMinutes / days, rounded half-up; 0 when days = 0. */
+  minutes: number;
+}
+
+export const NO_AVERAGE_DATA = 'אין מספיק נתונים לחישוב ממוצע';
+
 export interface AbsenceContext {
   /** All day statuses loaded (including the look-back period). */
   statusByDate: Map<LocalDate, DayStatus>;
@@ -169,8 +189,12 @@ export interface AbsenceContext {
   versionOn: (date: LocalDate) => SettingsVersion | null;
   /** Scheduled (expected) minutes of a regular day under the employee's schedule; 0 = not a workday. */
   scheduledMinutes: (date: LocalDate, s: EmployeeSettings) => number;
-  /** Average net minutes per worked day over the 3 calendar months before the date's month. */
-  averageDaily: (date: LocalDate) => { minutes: number; days: number } | null;
+  /** Average net minutes per worked day over the 3 complete calendar months before the date's month (null = not loaded). */
+  averageDaily: (date: LocalDate) => DayAverage | null;
+  /** Average net minutes per actually worked day in the date's own month (1.1.9). */
+  averageMonth: (date: LocalDate) => DayAverage;
+  /** Manual value of a paid absence day for the date's month (1.1.9). */
+  paidDayOverride: (date: LocalDate) => { minutes: number; reason: string } | null;
   business: BusinessAbsenceDefaults | undefined;
   cal: CalendarContext;
   historyFrom: LocalDate;
@@ -251,22 +275,30 @@ export function computeDayAttendance(date: LocalDate, status: DayStatus | null, 
   let dayMinutes = scheduled;
   let refText = '';
   if (scheduled > 0) {
-    if (a.paidDayReference === 'fixed') {
+    const override = ctx.paidDayOverride(date);
+    if (override && override.minutes > 0) {
+      dayMinutes = override.minutes;
+      refText = `${formatHM(dayMinutes)} שעות ליום — ערך ידני לחודש זה (${override.reason || 'ללא נימוק'})`;
+      if (!override.reason?.trim()) review('ערך יום היעדרות ידני לחודש ללא נימוק');
+    } else if (a.paidDayReference === 'fixed') {
       if (a.paidDayMinutes && a.paidDayMinutes > 0) {
         dayMinutes = a.paidDayMinutes;
-        refText = `${formatHM(dayMinutes)} שעות ליום (ערך קבוע שהוגדר)`;
+        refText = `${formatHM(dayMinutes)} שעות ליום (הזנה ידנית — שיטת חישוב לפי הגדרת העסק)`;
       } else {
         refText = `${formatHM(scheduled)} שעות לפי מתכונת העבודה (לא הוגדר ערך קבוע)`;
-        review('נבחר בסיס "שעות קבועות ליום" אך לא הוזן ערך — הוחלו שעות מתכונת העבודה');
+        review('נבחרה הזנה ידנית של שעות ליום אך לא הוזן ערך — הוחלו שעות מתכונת העבודה');
       }
-    } else if (a.paidDayReference === 'average_3m') {
-      const avg = ctx.averageDaily(date);
-      if (avg && avg.days >= 5) {
+    } else if (a.paidDayReference === 'average_3m' || a.paidDayReference === 'average_month') {
+      const avg = a.paidDayReference === 'average_month' ? ctx.averageMonth(date) : ctx.averageDaily(date);
+      const period = a.paidDayReference === 'average_month' ? 'בחודש הנוכחי' : 'בשלושת החודשים הקודמים';
+      if (avg && avg.days > 0) {
         dayMinutes = avg.minutes;
-        refText = `${formatHM(dayMinutes)} שעות — ממוצע ${avg.days} ימי עבודה ב-3 החודשים הקודמים`;
+        refText = `${formatHM(dayMinutes)} שעות — ממוצע שעות עבודה ${period} (${formatDurationHe(avg.workedMinutes)} ב-${avg.days} ימי עבודה בפועל, ${fmt(avg.from)}–${fmt(avg.to)}; שיטת חישוב לפי הגדרת העסק)`;
       } else {
-        refText = `${formatHM(scheduled)} שעות לפי מתכונת העבודה`;
-        review('אין מספיק ימי עבודה ב-3 החודשים הקודמים לחישוב ממוצע יומי — הוחלו שעות מתכונת העבודה');
+        // Never a silent standard day: without data the absence has no hours until a value is entered.
+        dayMinutes = 0;
+        refText = '';
+        review(`${NO_AVERAGE_DATA} (${avg ? 'אין ימי עבודה בפועל' : 'נתוני התקופה לא נטענו'} ${period}) — יש להזין ערך ידני לחודש או לבחור תקופת ייחוס אחרת`);
       }
     } else refText = `${formatHM(scheduled)} שעות לפי מתכונת העבודה של העובד ביום זה`;
   }
@@ -282,9 +314,9 @@ export function computeDayAttendance(date: LocalDate, status: DayStatus | null, 
       nominal = 0;
       review('הוזנה היעדרות חלקית ביום שאינו יום עבודה מתוכנן');
     } else {
-      nominal = Math.min(det.minutes, dayMinutes);
-      if (det.minutes > dayMinutes) review(`ההיעדרות החלקית (${formatHM(det.minutes)}) ארוכה מיום עבודה (${formatHM(dayMinutes)}) — הוגבלה ליום אחד`);
-      fraction = nominal / dayMinutes;
+      nominal = Math.min(det.minutes, dayMinutes || det.minutes);
+      if (dayMinutes && det.minutes > dayMinutes) review(`ההיעדרות החלקית (${formatHM(det.minutes)}) ארוכה מיום עבודה (${formatHM(dayMinutes)}) — הוגבלה ליום אחד`);
+      fraction = dayMinutes ? nominal / dayMinutes : 1;
       ex.push(`היעדרות חלקית: ${formatDurationHe(nominal)} מתוך ${formatDurationHe(dayMinutes)}.`);
     }
   } else if (workedToo) {
@@ -467,8 +499,10 @@ export function computeDayAttendance(date: LocalDate, status: DayStatus | null, 
       ex.push('היעדרות ללא תשלום — אינה נספרת בשעות או בימים המשולמים.');
       break;
     case 'reserve':
-      ex.push('מילואים — התגמול משולם דרך ביטוח לאומי ואינו נכלל בשעות המשולמות כאן.');
+      ex.push('מילואים — התגמול משולם לפי נוסחת המוסד לביטוח לאומי (הכנסה ב-3 החודשים שקדמו לשירות ÷ 90, בין רצפה לתקרה) ואינו נכלל בשעות המשולמות כאן.');
+      if (nominal > 0) ex.push(`שעות יום לדיווח בלבד: ${formatDurationHe(nominal)} — אינן שעות עבודה ואינן בסיס לתשלום שעתי.`);
       day.paidAbsenceNominalMinutes = 0;
+      day.valueBasis = 'statutory_formula';
       return day;
   }
 
@@ -496,7 +530,26 @@ export function computeDayAttendance(date: LocalDate, status: DayStatus | null, 
     ex.push(`שעות משולמות בגין ההיעדרות: ${formatDurationHe(nominal)} × ${rate}% = ${formatDurationHe(day.paidAbsenceEquivalentMinutes)} (שעות שווי, ללא תוספות שעות נוספות; אינן שעות עבודה בפועל).`);
   if (rate === null) ex.push('שיעור התשלום לא נקבע — לא נכללו שעות משולמות עד לבדיקה.');
 
-  // 5. Weekly credit: paid absence hours count toward the weekly regular allowance for LATER work that week.
+  // 5. Office valuation (1.1.9): base hourly rate × equivalent hours. Never presented as the statutory amount.
+  if (rate !== null && day.paidAbsenceEquivalentMinutes > 0 && PAID_CATEGORIES.includes(category)) {
+    if (a.salaryType === 'monthly') {
+      day.valueBasis = 'in_salary';
+      ex.push('עובד חודשי: יום ההיעדרות משולם במסגרת המשכורת החודשית — לא חושב תשלום נוסף (למניעת תשלום כפול).');
+    } else if (s.hourlyRateAgorot && s.hourlyRateAgorot > 0) {
+      day.valueBasis = 'office';
+      day.estimatedValueAgorot = roundHalfUp((s.hourlyRateAgorot * day.paidAbsenceEquivalentMinutes) / 60);
+      ex.push(
+        `הערכת ערך לפי הגדרת העסק: ₪${(day.estimatedValueAgorot / 100).toFixed(2)} = שכר שעתי ₪${(s.hourlyRateAgorot / 100).toFixed(2)} × ${formatHM(day.paidAbsenceEquivalentMinutes)} שעות (${formatHM(nominal)} × ${rate}%). זו שיטת חישוב לפי הגדרת העסק ואינה בהכרח הסכום לפי החוק.`,
+      );
+      if (category === 'vacation') {
+        ex.push('לפי חוק חופשה שנתית (ס׳ 10), לעובד שעתי/יומי: שכר יומי ממוצע (שכר 3 החודשים שקדמו לחופשה ÷ 90) × ימי החופשה בלוח. אין להחליף זכאות חוקית גבוהה יותר בהערכה זו.');
+        review('דמי החופשה לפי החוק מחושבים לפי השכר בפועל ב-3 החודשים הקודמים — יש להשוות בשכר להערכת המשרד');
+      }
+      if (category === 'holiday') review('דמי חגים לעובד שעתי/יומי לפי צו ההרחבה מחושבים לפי השכר הממוצע — יש להשוות בשכר להערכת המשרד');
+    } else day.valueBasis = 'no_rate';
+  }
+
+  // 6. Weekly credit: paid absence hours count toward the weekly regular allowance for LATER work that week.
   if (a.weeklyCredit === 'paid_absence' && PAID_CATEGORIES.includes(category) && rate !== null && rate > 0 && nominal > 0) {
     day.weeklyCreditMinutes = nominal;
     ex.push(`${formatDurationHe(nominal)} נזקפו למכסת השעות השבועית (42) לצורך חישוב שעות נוספות על עבודה בהמשך השבוע. הן אינן שעות נוספות בעצמן.`);

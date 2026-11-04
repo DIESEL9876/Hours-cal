@@ -25,6 +25,7 @@ import {
   defaultEmployeeSettings,
   validateSettings,
 } from '../engine/settings';
+import { isValidDate } from '../engine/time';
 
 export interface Business {
   id: string;
@@ -46,6 +47,41 @@ export interface Employee {
   createdAt: string;
   updatedAt: string;
   archivedAt: string | null;
+  /** Date of birth (1.1.9, optional). Age-dependent (youth) rules use the age on each attendance date. */
+  birthDate?: LocalDate | null;
+}
+
+/** 1.1.9 — monthly payroll components entered by the user (money only; never attendance). */
+export type AdjustmentCategory = 'advance' | 'bonus' | 'recuperation' | 'reserve' | 'other';
+export type AdjustmentTreatment = 'gross_addition' | 'advance' | 'employer_reimbursement' | 'informational';
+export type ReserveKind = 'wage_during_service' | 'nii_reimbursement' | 'additional_payable' | 'manual';
+
+export interface AdjustmentDetails {
+  /** Advances: amount proposed for recovery and amount actually authorised for deduction (with its basis). */
+  advance?: { proposedRecoveryAgorot: number | null; authorizedDeductionAgorot: number | null; authorization: string | null };
+  /** Reserve duty: what the amount represents. */
+  reserve?: { kind: ReserveKind };
+}
+
+export interface MonthlyAdjustment {
+  id: string;
+  businessId: string;
+  employeeId: string;
+  yearMonth: string;
+  category: AdjustmentCategory;
+  amountAgorot: number;
+  date: LocalDate | null;
+  description: string | null;
+  treatment: AdjustmentTreatment;
+  details: AdjustmentDetails;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** 1.1.9 — per employee and month: manual paid-day value and travel-day corrections (with reasons). */
+export interface EmployeeMonthData {
+  paidDayOverride?: { minutes: number; reason: string; calculatedMinutes: number | null } | null;
+  travel?: { eligibleDays: number; reason: string; autoDays: number } | null;
 }
 
 export interface BulkImportInput {
@@ -93,6 +129,8 @@ export interface MonthReview {
   snapshotJson: string | null;
   note: string | null;
   updatedAt: string;
+  /** 1.1.9: rule versions recorded at finalisation. */
+  rulesJson?: string | null;
 }
 
 export interface AuditEntry {
@@ -185,6 +223,13 @@ function dayEntryStatements(businessId: string, employeeId: string, date: LocalD
   return stmts;
 }
 
+function validateBirthDate(d: LocalDate | null) {
+  if (!d) return;
+  if (!isValidDate(d)) throw new RepoError('תאריך לידה לא תקין');
+  if (d > new Date().toISOString().slice(0, 10)) throw new RepoError('תאריך לידה עתידי');
+  if (d < '1900-01-01') throw new RepoError('תאריך לידה לא סביר');
+}
+
 /** Same validation as applyAttendanceImport for one imported shift. */
 function validateImportedShift(s: ShiftInput) {
   if (!s.startAt && !s.endAt) throw new RepoError('משמרת ריקה אינה נשמרת');
@@ -219,6 +264,32 @@ function toBusiness(r: Row): Business {
   };
 }
 
+function toAdjustment(r: Row): MonthlyAdjustment {
+  return {
+    id: r.id as string,
+    businessId: r.business_id as string,
+    employeeId: r.employee_id as string,
+    yearMonth: r.year_month as string,
+    category: r.category as AdjustmentCategory,
+    amountAgorot: Number(r.amount_agorot),
+    date: (r.entry_date as string) ?? null,
+    description: (r.description as string) ?? null,
+    treatment: r.treatment as AdjustmentTreatment,
+    details: r.details_json ? (JSON.parse(r.details_json as string) as AdjustmentDetails) : {},
+    createdAt: r.created_at as string,
+    updatedAt: r.updated_at as string,
+  };
+}
+
+/** Default accounting treatment of each category (the user may change it where it makes sense). */
+export function defaultTreatment(category: AdjustmentCategory, reserve?: ReserveKind): AdjustmentTreatment {
+  if (category === 'advance') return 'advance';
+  if (category === 'reserve') return reserve === 'nii_reimbursement' ? 'employer_reimbursement' : reserve === 'manual' ? 'informational' : 'gross_addition';
+  return 'gross_addition';
+}
+
+const isYm = (ym: string) => /^\d{4}-(0[1-9]|1[0-2])$/.test(ym);
+
 function toEmployee(r: Row): Employee {
   return {
     id: r.id as string,
@@ -229,6 +300,7 @@ function toEmployee(r: Row): Employee {
     createdAt: r.created_at as string,
     updatedAt: r.updated_at as string,
     archivedAt: (r.archived_at as string) ?? null,
+    birthDate: (r.birth_date as string) ?? null,
   };
 }
 
@@ -386,7 +458,7 @@ export class Repository {
 
   async createEmployee(
     businessId: string,
-    input: { fullName: string; employeeNumber?: string | null; notes?: string | null; settings: EmployeeSettings },
+    input: { fullName: string; employeeNumber?: string | null; notes?: string | null; birthDate?: LocalDate | null; settings: EmployeeSettings },
   ): Promise<Employee> {
     await this.getBusiness(businessId);
     const fullName = input.fullName.trim();
@@ -397,12 +469,13 @@ export class Repository {
     if (num) await this.assertUniqueNumber(businessId, num, null);
     input = { ...input, settings: employeeSettingsOnly(input.settings) };
     const t = now();
-    const emp: Employee = { id: uuid(), businessId, fullName, employeeNumber: num, notes: input.notes?.trim() || null, createdAt: t, updatedAt: t, archivedAt: null };
+    validateBirthDate(input.birthDate ?? null);
+    const emp: Employee = { id: uuid(), businessId, fullName, employeeNumber: num, notes: input.notes?.trim() || null, createdAt: t, updatedAt: t, archivedAt: null, birthDate: input.birthDate || null };
     const versionId = uuid();
     await this.driver.batch([
       {
-        sql: `INSERT INTO employees (id, business_id, full_name, employee_number, notes, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-        params: [emp.id, businessId, emp.fullName, emp.employeeNumber, emp.notes, t, t],
+        sql: `INSERT INTO employees (id, business_id, full_name, employee_number, notes, birth_date, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        params: [emp.id, businessId, emp.fullName, emp.employeeNumber, emp.notes, emp.birthDate ?? null, t, t],
       },
       {
         sql: `INSERT INTO employee_settings (id, employee_id, effective_from, settings_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)`,
@@ -421,21 +494,23 @@ export class Repository {
     if (rows.some((r) => r.id !== exceptId)) throw new RepoError('מספר עובד זה כבר קיים בעסק');
   }
 
-  async updateEmployee(businessId: string, id: string, patch: { fullName?: string; employeeNumber?: string | null; notes?: string | null }): Promise<Employee> {
+  async updateEmployee(businessId: string, id: string, patch: { fullName?: string; employeeNumber?: string | null; notes?: string | null; birthDate?: LocalDate | null }): Promise<Employee> {
     const before = await this.getEmployee(businessId, id);
     const after: Employee = {
       ...before,
       fullName: patch.fullName !== undefined ? patch.fullName.trim() : before.fullName,
       employeeNumber: patch.employeeNumber !== undefined ? patch.employeeNumber?.trim() || null : before.employeeNumber,
       notes: patch.notes !== undefined ? patch.notes?.trim() || null : before.notes,
+      birthDate: patch.birthDate !== undefined ? patch.birthDate || null : (before.birthDate ?? null),
       updatedAt: now(),
     };
     if (!after.fullName) throw new RepoError('יש להזין שם עובד');
+    validateBirthDate(after.birthDate ?? null);
     if (after.employeeNumber) await this.assertUniqueNumber(businessId, after.employeeNumber, id);
     await this.driver.batch([
       {
-        sql: `UPDATE employees SET full_name = ?, employee_number = ?, notes = ?, updated_at = ? WHERE id = ? AND business_id = ?`,
-        params: [after.fullName, after.employeeNumber, after.notes, after.updatedAt, id, businessId],
+        sql: `UPDATE employees SET full_name = ?, employee_number = ?, notes = ?, birth_date = ?, updated_at = ? WHERE id = ? AND business_id = ?`,
+        params: [after.fullName, after.employeeNumber, after.notes, after.birthDate ?? null, after.updatedAt, id, businessId],
       },
       audit('employee', 'update', { businessId, employeeId: id, entityId: id }, before, after),
     ]);
@@ -793,6 +868,105 @@ export class Repository {
     await this.driver.batch(stmts);
   }
 
+  // ---------------------------------------------------------------- monthly payroll components (1.1.9)
+  /** A month that was closed after review is read-only until it is reopened. */
+  private async assertMonthOpen(businessId: string, yearMonth: string) {
+    if (!isYm(yearMonth)) throw new RepoError('חודש לא תקין');
+    if ((await this.getMonthReview(businessId, yearMonth)).status === 'final') throw new RepoError('החודש נסגר לאחר בדיקה — יש לפתוח אותו מחדש בסיכום החודשי לפני שינוי');
+  }
+
+  async listAdjustments(businessId: string, yearMonth: string, employeeId?: string): Promise<MonthlyAdjustment[]> {
+    const rows = await this.driver.select(
+      `SELECT * FROM monthly_adjustments WHERE business_id = ? AND year_month = ? ${employeeId ? 'AND employee_id = ?' : ''} AND deleted_at IS NULL ORDER BY created_at, id`,
+      employeeId ? [businessId, yearMonth, employeeId] : [businessId, yearMonth],
+    );
+    return rows.map(toAdjustment);
+  }
+
+  /**
+   * Creates or updates one adjustment. The id is chosen by the caller, so repeating the same save (double click)
+   * updates the same row instead of posting it twice.
+   */
+  async saveAdjustment(input: Omit<MonthlyAdjustment, 'createdAt' | 'updatedAt' | 'treatment'> & { treatment?: AdjustmentTreatment }): Promise<MonthlyAdjustment> {
+    await this.getEmployee(input.businessId, input.employeeId);
+    await this.assertMonthOpen(input.businessId, input.yearMonth);
+    if (!['advance', 'bonus', 'recuperation', 'reserve', 'other'].includes(input.category)) throw new RepoError('סוג רכיב לא תקין');
+    if (!Number.isInteger(input.amountAgorot) || input.amountAgorot <= 0) throw new RepoError('יש להזין סכום חיובי');
+    if (input.date && (!isValidDate(input.date) || input.date.slice(0, 7) !== input.yearMonth)) throw new RepoError('התאריך חייב להיות בחודש הדוח');
+    const adv = input.details.advance;
+    for (const v of [adv?.proposedRecoveryAgorot, adv?.authorizedDeductionAgorot]) if (v != null && (!Number.isInteger(v) || v < 0 || v > input.amountAgorot)) throw new RepoError('סכום ההחזר אינו יכול לעלות על סכום המקדמה');
+    if (adv?.authorizedDeductionAgorot && !adv.authorization?.trim()) throw new RepoError('ניכוי מקדמה מחייב ציון הבסיס לאישור (למשל הסכמה בכתב של העובד)');
+    const rows = await this.driver.select(`SELECT * FROM monthly_adjustments WHERE id = ?`, [input.id]);
+    const before = rows.length ? toAdjustment(rows[0]) : null;
+    if (before && (before.employeeId !== input.employeeId || before.businessId !== input.businessId)) throw new RepoError('הרכיב שייך לעובד אחר');
+    if (before && before.yearMonth !== input.yearMonth) await this.assertMonthOpen(before.businessId, before.yearMonth);
+    const t = now();
+    const treatment = input.treatment ?? defaultTreatment(input.category, input.details.reserve?.kind);
+    const after: MonthlyAdjustment = { ...input, treatment, description: input.description?.trim() || null, createdAt: before?.createdAt ?? t, updatedAt: t };
+    await this.driver.batch([
+      before
+        ? {
+            sql: `UPDATE monthly_adjustments SET year_month = ?, category = ?, amount_agorot = ?, entry_date = ?, description = ?, treatment = ?, details_json = ?, updated_at = ?, deleted_at = NULL WHERE id = ?`,
+            params: [after.yearMonth, after.category, after.amountAgorot, after.date, after.description, after.treatment, JSON.stringify(after.details), t, after.id],
+          }
+        : {
+            sql: `INSERT INTO monthly_adjustments (id, business_id, employee_id, year_month, category, amount_agorot, entry_date, description, treatment, details_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            params: [after.id, after.businessId, after.employeeId, after.yearMonth, after.category, after.amountAgorot, after.date, after.description, after.treatment, JSON.stringify(after.details), t, t],
+          },
+      audit('monthly_adjustment', before ? 'update' : 'create', { businessId: after.businessId, employeeId: after.employeeId, entityId: after.id }, before, after),
+    ]);
+    return after;
+  }
+
+  /** Removes an adjustment (kept in the database as deleted, with its audit history). */
+  async deleteAdjustment(businessId: string, id: string): Promise<void> {
+    const rows = await this.driver.select(`SELECT * FROM monthly_adjustments WHERE id = ? AND business_id = ? AND deleted_at IS NULL`, [id, businessId]);
+    if (!rows.length) throw new RepoError('הרכיב לא נמצא');
+    const before = toAdjustment(rows[0]);
+    await this.assertMonthOpen(businessId, before.yearMonth);
+    const t = now();
+    await this.driver.batch([
+      { sql: `UPDATE monthly_adjustments SET deleted_at = ?, updated_at = ? WHERE id = ?`, params: [t, t, id] },
+      audit('monthly_adjustment', 'delete', { businessId, employeeId: before.employeeId, entityId: id }, before, null),
+    ]);
+  }
+
+  async getEmployeeMonth(businessId: string, employeeId: string, yearMonth: string): Promise<EmployeeMonthData> {
+    const rows = await this.driver.select(`SELECT data_json FROM employee_months WHERE business_id = ? AND employee_id = ? AND year_month = ?`, [businessId, employeeId, yearMonth]);
+    return rows.length ? (JSON.parse(rows[0].data_json as string) as EmployeeMonthData) : {};
+  }
+
+  async listEmployeeMonths(businessId: string, yearMonth: string): Promise<Map<string, EmployeeMonthData>> {
+    const rows = await this.driver.select(`SELECT employee_id, data_json FROM employee_months WHERE business_id = ? AND year_month = ?`, [businessId, yearMonth]);
+    return new Map(rows.map((r) => [r.employee_id as string, JSON.parse(r.data_json as string) as EmployeeMonthData]));
+  }
+
+  async setEmployeeMonth(businessId: string, employeeId: string, yearMonth: string, data: EmployeeMonthData): Promise<void> {
+    await this.getEmployee(businessId, employeeId);
+    await this.assertMonthOpen(businessId, yearMonth);
+    const o = data.paidDayOverride;
+    if (o && (!Number.isInteger(o.minutes) || o.minutes <= 0 || o.minutes > 24 * 60)) throw new RepoError('ערך יום לא תקין');
+    if (o && !o.reason.trim()) throw new RepoError('יש לציין סיבה לשינוי הידני');
+    const tr = data.travel;
+    if (tr && (!Number.isInteger(tr.eligibleDays) || tr.eligibleDays < 0 || tr.eligibleDays > 31)) throw new RepoError('מספר ימי נסיעה לא תקין');
+    if (tr && !tr.reason.trim()) throw new RepoError('יש לציין סיבה לתיקון ימי הנסיעה');
+    const before = await this.getEmployeeMonth(businessId, employeeId, yearMonth);
+    const t = now();
+    const clean: EmployeeMonthData = {};
+    if (o) clean.paidDayOverride = o;
+    if (tr) clean.travel = tr;
+    await this.driver.batch([
+      Object.keys(clean).length
+        ? {
+            sql: `INSERT INTO employee_months (employee_id, business_id, year_month, data_json, updated_at) VALUES (?, ?, ?, ?, ?)
+                  ON CONFLICT(employee_id, year_month) DO UPDATE SET data_json = excluded.data_json, updated_at = excluded.updated_at`,
+            params: [employeeId, businessId, yearMonth, JSON.stringify(clean), t],
+          }
+        : { sql: `DELETE FROM employee_months WHERE employee_id = ? AND year_month = ? AND business_id = ?`, params: [employeeId, yearMonth, businessId] },
+      audit('employee_month', 'update', { businessId, employeeId, entityId: yearMonth }, before, clean),
+    ]);
+  }
+
   // ---------------------------------------------------------------- day entries (status + note)
   async getDayEntries(businessId: string, employeeId: string, from: LocalDate, to: LocalDate): Promise<DayEntry[]> {
     const rows = await this.driver.select(
@@ -836,7 +1010,7 @@ export class Repository {
   // ---------------------------------------------------------------- month reviews
   async getMonthReview(businessId: string, yearMonth: string): Promise<MonthReview> {
     const rows = await this.driver.select(`SELECT * FROM month_reviews WHERE business_id = ? AND year_month = ?`, [businessId, yearMonth]);
-    if (!rows.length) return { businessId, yearMonth, status: 'open', finalizedAt: null, snapshotHash: null, snapshotJson: null, note: null, updatedAt: '' };
+    if (!rows.length) return { businessId, yearMonth, status: 'open', finalizedAt: null, snapshotHash: null, snapshotJson: null, note: null, updatedAt: '', rulesJson: null };
     const r = rows[0];
     return {
       businessId,
@@ -847,6 +1021,7 @@ export class Repository {
       snapshotJson: (r.snapshot_json as string) ?? null,
       note: (r.note as string) ?? null,
       updatedAt: r.updated_at as string,
+      rulesJson: (r.rules_json as string) ?? null,
     };
   }
 
@@ -856,16 +1031,18 @@ export class Repository {
     status: ReviewStatus,
     snapshot: { json: string; hash: string } | null,
     note: string | null = null,
+    /** 1.1.9: calculation-rule versions used for the closed month (kept outside the snapshot hash). */
+    rules: unknown = null,
   ): Promise<void> {
     const before = await this.getMonthReview(businessId, yearMonth);
     const t = now();
     await this.driver.batch([
       {
-        sql: `INSERT INTO month_reviews (business_id, year_month, status, finalized_at, snapshot_json, snapshot_hash, note, updated_at)
-              VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        sql: `INSERT INTO month_reviews (business_id, year_month, status, finalized_at, snapshot_json, snapshot_hash, note, rules_json, updated_at)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
               ON CONFLICT(business_id, year_month) DO UPDATE SET status = excluded.status, finalized_at = excluded.finalized_at,
-                snapshot_json = excluded.snapshot_json, snapshot_hash = excluded.snapshot_hash, note = excluded.note, updated_at = excluded.updated_at`,
-        params: [businessId, yearMonth, status, status === 'final' ? t : null, snapshot?.json ?? null, snapshot?.hash ?? null, note, t],
+                snapshot_json = excluded.snapshot_json, snapshot_hash = excluded.snapshot_hash, note = excluded.note, rules_json = excluded.rules_json, updated_at = excluded.updated_at`,
+        params: [businessId, yearMonth, status, status === 'final' ? t : null, snapshot?.json ?? null, snapshot?.hash ?? null, note, rules === null ? null : JSON.stringify(rules), t],
       },
       audit('month_review', status, { businessId, entityId: yearMonth }, { status: before.status, hash: before.snapshotHash }, { status, hash: snapshot?.hash ?? null }),
     ]);

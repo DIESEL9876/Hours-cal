@@ -20,6 +20,8 @@ import type {
   LocalDate,
   MinuteBuckets,
   PeriodTotals,
+  PaidDayInfo,
+  AgreementHoursRule,
   Premium,
   SettingsVersion,
   ShiftInput,
@@ -31,8 +33,9 @@ import type {
 } from './types';
 import { CalendarContext, type Interval } from './calendar';
 import { calculateDeductibleBreakMinutes, calculateNetWorkedMinutes } from './breaks';
-import { fridayPolicyOn, LAW, OFFICE_POLICY, resolveSettings } from './settings';
-import { absenceHistoryFrom, computeDayAttendance, emptyDayAttendance, sumAttendance, type AbsenceContext } from './absence';
+import { fridayPolicyOn, LAW, OFFICE_POLICY, resolveAbsenceSettings, resolveSettings } from './settings';
+import { absenceHistoryFrom, computeDayAttendance, emptyDayAttendance, sumAttendance, type AbsenceContext, type DayAverage } from './absence';
+import { checkYouthDay, checkYouthWeek, youthStatusOn } from './youth';
 import {
   addDays,
   eachDate,
@@ -148,6 +151,7 @@ export function getApplicableDailyThreshold(
   settings: EmployeeSettings,
   cal: CalendarContext,
   isNight: boolean,
+  agreement?: AgreementHoursRule | null,
 ): ThresholdInfo {
   const wd = weekdayOf(date);
   const scheduled = settings.workDays.includes(wd);
@@ -169,7 +173,13 @@ export function getApplicableDailyThreshold(
 
   let base: number;
   let applyReductions = true;
-  if (settings.legalProfile === 'custom_contract' && settings.customProfile) {
+  if (agreement) {
+    // Verified agreement rule profile (1.1.9) — applied like a contractual profile, with its citation.
+    base = agreement.dailyThresholdMinutes[wd];
+    info.weeklyMinutes = agreement.weeklyThresholdMinutes;
+    info.firstTierMinutes = agreement.firstTierMinutes;
+    reasons.push(`תקן לפי ${agreement.source}: ${formatDurationHe(base)}`);
+  } else if (settings.legalProfile === 'custom_contract' && settings.customProfile) {
     const cp = settings.customProfile;
     base = cp.dailyThresholdMinutes[wd];
     info.weeklyMinutes = cp.weeklyThresholdMinutes;
@@ -445,6 +455,12 @@ interface DayWork {
 }
 
 export function calculateEmployeePeriod(input: EmployeePeriodInput, opts: { skipAbsence?: boolean } = {}): EmployeePeriodResult {
+  // With a date of birth, age rules take precedence (1.1.9): the legacy "minor" profile (unclassified hours) is replaced by the
+  // general classification plus per-date youth checks.
+  const minorProfileSet = input.settingsVersions.some((v) => v.settings.legalProfile === 'minor');
+  if (input.birthDate && minorProfileSet)
+    input = { ...input, settingsVersions: input.settingsVersions.map((v) => (v.settings.legalProfile === 'minor' ? { ...v, settings: { ...v.settings, legalProfile: 'general_private' } } : v)) };
+  const youthOn = (date: LocalDate) => youthStatusOn(input.birthDate, date)?.minor === true;
   const { from, to } = input;
   if (from > to) throw new Error('from > to');
   const calcFrom = weekStartOf(from);
@@ -562,7 +578,8 @@ export function calculateEmployeePeriod(input: EmployeePeriodInput, opts: { skip
     }
     if (dw.version) {
       const s = dw.version.settings;
-      const t = getApplicableDailyThreshold(dr.date, s, cal, dr.isNight);
+      const agreementRule = input.agreementHours?.find((r) => dr.date >= r.from && (r.to === null || dr.date <= r.to)) ?? null;
+      const t = getApplicableDailyThreshold(dr.date, s, cal, dr.isNight, agreementRule);
       dw.threshold = t;
       dr.scheduled = t.scheduled;
       dr.shortDay = t.shortDay;
@@ -583,7 +600,7 @@ export function calculateEmployeePeriod(input: EmployeePeriodInput, opts: { skip
           );
         if (t.eveReductionApplied && t.minutes !== null && dr.netMinutes > t.minutes)
           warn(dr.warnings, 'EVE_THRESHOLD_REVIEW', 'review', 'הופעל תקן מקוצר של 7 שעות (ערב מנוחה/ערב חג) – יש לוודא שהוא חל על הסדר העבודה', dr.date);
-        if (dr.netMinutes > LAW.MAX_DAILY_MINUTES)
+        if (dr.netMinutes > LAW.MAX_DAILY_MINUTES && !youthOn(dr.date))
           warn(dr.warnings, 'DAILY_LIMIT', 'compliance', `יום עבודה של ${formatHM(dr.netMinutes)} שעות – חורג מהמגבלה של 12 שעות ביום כולל שעות נוספות`, dr.date);
       }
     }
@@ -592,6 +609,7 @@ export function calculateEmployeePeriod(input: EmployeePeriodInput, opts: { skip
   // Actual vs. paid attendance (user-classified absences only). Computed before the weekly classification
   // because qualifying paid absences may credit the weekly allowance for later work in the same week.
   const credits = new Map<LocalDate, number>();
+  let paidDayInfo: PaidDayInfo | null = null;
   if (!opts.skipAbsence) {
     const historyFrom = input.historyFrom && input.historyFrom < ext.from ? input.historyFrom : ext.from;
     let history: Map<LocalDate, number> | null = null;
@@ -607,36 +625,47 @@ export function calculateEmployeePeriod(input: EmployeePeriodInput, opts: { skip
     };
     const netByDate = (date: LocalDate) => dayWork.get(date)?.result.netMinutes ?? historyNet().get(date) ?? 0;
     const wideCal = new CalendarContext(addDays(historyFrom, -3), addDays(calcTo, 14), input.customHolidays);
-    const avgCache = new Map<string, { minutes: number; days: number } | null>();
+    const avgCache = new Map<string, DayAverage | null>();
+    const average = (from: LocalDate, to: LocalDate): DayAverage | null => {
+      if (from < historyFrom) return null;
+      let workedMinutes = 0;
+      let days = 0;
+      for (const d of eachDate(from, to)) {
+        const n = netByDate(d);
+        if (n > 0) {
+          workedMinutes += n;
+          days++;
+        }
+      }
+      return { from, to, days, workedMinutes, minutes: days ? Math.floor(workedMinutes / days + 0.5) : 0 };
+    };
     const ctx: AbsenceContext = {
       statusByDate,
       netByDate,
       versionOn: (date) => resolveSettings(input.settingsVersions, date),
       scheduledMinutes: (date, st) => scheduledDayMinutes(date, st, wideCal),
       averageDaily: (date) => {
-        const key = date.slice(0, 7);
+        const key = `3m:${date.slice(0, 7)}`;
         if (!avgCache.has(key)) {
-          let total = 0;
-          let days = 0;
-          const start = absenceAverageWindow(date);
-          if (start.from < historyFrom) avgCache.set(key, null);
-          else {
-            for (const d of eachDate(start.from, start.to)) {
-              const n = netByDate(d);
-              if (n > 0) {
-                total += n;
-                days++;
-              }
-            }
-            avgCache.set(key, days ? { minutes: Math.round(total / days), days } : null);
-          }
+          const w = absenceAverageWindow(date);
+          avgCache.set(key, average(w.from, w.to));
         }
         return avgCache.get(key)!;
       },
+      averageMonth: (date) => {
+        const key = `m:${date.slice(0, 7)}`;
+        if (!avgCache.has(key)) {
+          const first = `${date.slice(0, 7)}-01`;
+          avgCache.set(key, average(first, addDays(addMonthsFirst(first, 1), -1)) ?? { from: first, to: first, days: 0, workedMinutes: 0, minutes: 0 });
+        }
+        return avgCache.get(key)!;
+      },
+      paidDayOverride: (date) => input.paidDayOverrides?.find((o) => o.ym === date.slice(0, 7)) ?? null,
       business: input.businessAbsence,
       cal: wideCal,
       historyFrom,
     };
+    paidDayInfo = describePaidDay(from, input, ctx, scheduledDayMinutes, wideCal);
     for (const dw of dayWork.values()) {
       dw.result.attendance = computeDayAttendance(dw.date, dw.status, ctx);
       if (dw.result.attendance.weeklyCreditMinutes) credits.set(dw.date, dw.result.attendance.weeklyCreditMinutes);
@@ -735,9 +764,14 @@ export function calculateEmployeePeriod(input: EmployeePeriodInput, opts: { skip
 
     // Weekly compliance checks (attached to the last worked day of the week inside the period).
     const weekOt = week.dailyOvertimeMinutes + week.weeklyOvertimeMinutes;
-    if (weekOt > LAW.MAX_WEEKLY_OVERTIME_MINUTES)
+    // Minors: the adult overtime-permit limits do not apply — the youth limits below do (overtime is prohibited).
+    const youthDates = eachDate(ws, we).filter((d) => youthOn(d) && (dayWork.get(d)?.result.netMinutes ?? 0) > 0);
+    if (youthDates.length) week.warnings.push(...checkYouthWeek(youthDates[youthDates.length - 1], youthDates.reduce((a, d) => a + dayWork.get(d)!.result.netMinutes, 0)));
+    if (youthDates.length) {
+      // adult weekly limits skipped for weeks with youth work
+    } else if (weekOt > LAW.MAX_WEEKLY_OVERTIME_MINUTES)
       warn(week.warnings, 'WEEKLY_OT_LIMIT', 'compliance', `בשבוע זה ${formatHM(weekOt)} שעות נוספות – מעל המכסה הכללית של 16 שעות שבועיות`, we);
-    if (week.netMinutes > LAW.MAX_WEEKLY_TOTAL_MINUTES)
+    if (week.netMinutes > LAW.MAX_WEEKLY_TOTAL_MINUTES && !youthDates.length)
       warn(week.warnings, 'WEEKLY_TOTAL_LIMIT', 'compliance', `סך שעות העבודה בשבוע (${formatHM(week.netMinutes)}) עולה על 58 שעות`, we);
     checkWeeklyRest(ws, we, dayWork, timed, cal, week.warnings);
     weeks.push(week);
@@ -762,6 +796,33 @@ export function calculateEmployeePeriod(input: EmployeePeriodInput, opts: { skip
       };
       cur.result.warnings.push(w);
       dw.result.warnings.push(w);
+    }
+  }
+
+  // Youth Employment Law checks per attendance date (1.1.9). Warnings only — worked minutes are never changed.
+  if (input.birthDate) {
+    for (const dw of dayWork.values()) {
+      const y = youthStatusOn(input.birthDate, dw.date);
+      if (!y || !dw.version) continue;
+      if (!y.minor) {
+        if (minorProfileSet && dw.result.worked && dw.version.settings.legalProfile === 'general_private' && input.settingsVersions.length && dw.date >= from && dw.date <= to)
+          warn(dw.result.warnings, 'MINOR_PROFILE_ADULT', 'review', 'העובד הוגדר כנער, אך לפי תאריך הלידה הוא בגיר ביום זה — יש לעדכן את פרופיל העובד', dw.date);
+        continue;
+      }
+      const s = dw.version.settings;
+      dw.result.warnings.push(
+        ...checkYouthDay({
+          date: dw.date,
+          age: y.age,
+          netMinutes: dw.result.netMinutes,
+          grossMinutes: dw.result.grossMinutes,
+          breakMinutes: dw.result.breakMinutes + dw.result.paidBreakMinutes,
+          minutes: dw.minutes.map((m) => ({ minuteOfDay: utcToLocal(m.ms).minuteOfDay, premium: m.premium })),
+          eve: dw.result.restEve || dw.result.holidayEve,
+          fiveDayWeek: s.workweek === 'five',
+          hourlyRateAgorot: s.hourlyRateAgorot,
+        }),
+      );
     }
   }
 
@@ -814,7 +875,16 @@ export function calculateEmployeePeriod(input: EmployeePeriodInput, opts: { skip
     eachDate(from, to).map((d) => dayWork.get(d)!),
     periodWarnings,
   );
-  return { employeeId: input.employeeId, from, to, days, weeks: relevantWeeks, totals, warnings: periodWarnings, attendance: sumAttendance(days.map((d) => d.attendance)) };
+  const result: EmployeePeriodResult = { employeeId: input.employeeId, from, to, days, weeks: relevantWeeks, totals, warnings: periodWarnings, attendance: sumAttendance(days.map((d) => d.attendance)) };
+  if (paidDayInfo) result.paidDay = paidDayInfo;
+  const youthDays = days.filter((d) => d.worked && youthOn(d.date)).length;
+  let turns18: LocalDate | null = null;
+  if (input.birthDate) {
+    const b18 = `${+input.birthDate.slice(0, 4) + 18}${input.birthDate.slice(4)}`;
+    if (b18 >= from && b18 <= to) turns18 = b18;
+  }
+  result.age = { birthDate: input.birthDate ?? null, youthDays, turns18 };
+  return result;
 }
 
 function checkWeeklyRest(
@@ -1000,7 +1070,62 @@ export function scheduledDayMinutes(date: LocalDate, s: EmployeeSettings, cal: C
   return getApplicableDailyThreshold(date, general, cal, false).minutes ?? 0;
 }
 
-/** The 3 calendar months before the month of `date` (average daily hours for hourly/daily employees). */
+/** How a full paid absence day is valued in the month of `date` (transparency panel, 1.1.9). */
+function describePaidDay(
+  date: LocalDate,
+  input: EmployeePeriodInput,
+  ctx: AbsenceContext,
+  scheduled: (d: LocalDate, s: EmployeeSettings, cal: CalendarContext) => number,
+  cal: CalendarContext,
+): PaidDayInfo | null {
+  const v = resolveSettings(input.settingsVersions, date) ?? resolveSettings(input.settingsVersions, input.to);
+  if (!v) return null;
+  const a = resolveAbsenceSettings(v.settings, date, input.businessAbsence);
+  const method = a.paidDayReference;
+  let info: PaidDayInfo;
+  if (method === 'average_month' || method === 'average_3m') {
+    const avg = method === 'average_month' ? ctx.averageMonth(date) : ctx.averageDaily(date);
+    info = {
+      method,
+      from: avg?.from ?? null,
+      to: avg?.to ?? null,
+      workedDays: avg?.days ?? 0,
+      workedMinutes: avg?.workedMinutes ?? 0,
+      dayMinutes: avg && avg.days > 0 ? avg.minutes : null,
+      insufficient: !avg || avg.days === 0,
+    };
+  } else if (method === 'fixed') {
+    info = { method, from: null, to: null, workedDays: 0, workedMinutes: 0, dayMinutes: a.paidDayMinutes, insufficient: !a.paidDayMinutes };
+  } else {
+    // Schedule: the first scheduled day of the month shows the employee's regular day.
+    let m: number | null = null;
+    for (let d = `${date.slice(0, 7)}-01`; d.slice(0, 7) === date.slice(0, 7) && m === null; d = addDays(d, 1)) {
+      const x = scheduled(d, v.settings, cal);
+      if (x > 0) m = x;
+    }
+    info = { method: 'schedule', from: null, to: null, workedDays: 0, workedMinutes: 0, dayMinutes: m, insufficient: m === null };
+  }
+  const o = ctx.paidDayOverride(date);
+  if (o && o.minutes > 0) info = { ...info, method: 'override', calculatedMinutes: info.dayMinutes, dayMinutes: o.minutes, insufficient: false, overrideReason: o.reason };
+  return info;
+}
+
+/** First day of the month `n` months after the month of `first`. */
+function addMonthsFirst(first: LocalDate, n: number): LocalDate {
+  let y = +first.slice(0, 4);
+  let m = +first.slice(5, 7) + n;
+  while (m > 12) {
+    m -= 12;
+    y++;
+  }
+  while (m < 1) {
+    m += 12;
+    y--;
+  }
+  return `${y}-${String(m).padStart(2, '0')}-01`;
+}
+
+/** The 3 complete calendar months before the month of `date` (e.g. Nov 2026 → Aug–Oct 2026). */
 export function absenceAverageWindow(date: LocalDate): { from: LocalDate; to: LocalDate } {
   const y = +date.slice(0, 4);
   const m = +date.slice(5, 7);

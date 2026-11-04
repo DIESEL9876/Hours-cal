@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  ageOn,
   BEGINNING_OF_TIME,
   businessFridayHistory,
   businessFridayOn,
@@ -16,8 +17,9 @@ import type { AuditEntry, Business, Employee } from '../../data/repo';
 import { computeBusinessMonth } from '../../data/service';
 import { Crumbs, useApp } from '../App';
 import { Badge, Button, Card, EmptyState, Field, Modal, PageHeader, Segmented, useUi } from '../components';
-import { IconCalendar, IconChart, IconClock, IconEdit, IconHistory, IconPlus, IconSearch, IconUpload, IconUsers } from '../icons';
+import { IconCalendar, IconChart, IconClock, IconCoins, IconEdit, IconHistory, IconPlus, IconSearch, IconUpload, IconUsers } from '../icons';
 import { BULK_ACCEPT, BulkImportWizard } from './BulkImport';
+import { PayrollItemsDialog } from './PayrollItems';
 import { MonthPicker } from '../MonthPicker';
 import { SettingsEditor } from '../SettingsEditor';
 import { formatDateHe, formatTimestamp, hm, monthTitle, scheduleLabel, weekdayName } from '../format';
@@ -43,6 +45,7 @@ export function EmployeesScreen({ businessId }: { businessId: string }) {
   const [showAudit, setShowAudit] = useState(false);
   const [showArchived, setShowArchived] = useState(false);
   const [bulkFile, setBulkFile] = useState<File | null>(null);
+  const [adjusting, setAdjusting] = useState<Employee | null>(null);
   const bulkInput = useRef<HTMLInputElement>(null);
 
   const load = useCallback(async () => {
@@ -207,6 +210,9 @@ export function EmployeesScreen({ businessId }: { businessId: string }) {
                       <td className="px-3 py-3 text-[13px] text-ink-soft">{formatTimestamp(r.employee.updatedAt)}</td>
                       <td className="px-4 py-3">
                         <div className="flex justify-end gap-1.5">
+                          <Button size="sm" icon={<IconCoins size={15} />} onClick={() => setAdjusting(r.employee)} data-testid="payroll-items-button">
+                            רכיבי שכר נוספים
+                          </Button>
                           <Button size="sm" variant="primary" icon={<IconClock size={15} />} onClick={() => go({ name: 'attendance', businessId, employeeId: r.employee.id })}>
                             פתיחת דוח שעות
                           </Button>
@@ -231,6 +237,7 @@ export function EmployeesScreen({ businessId }: { businessId: string }) {
         )}
       </Card>
 
+      {adjusting && <PayrollItemsDialog business={business} employee={adjusting} ym={ym} onClose={() => setAdjusting(null)} onChanged={() => load().catch(() => undefined)} />}
       {bulkFile && (
         <BulkImportWizard
           business={business}
@@ -274,11 +281,13 @@ function EmployeeForm({ business, employee, onClose, onSaved }: { business: Busi
   const [fullName, setFullName] = useState(employee?.fullName ?? '');
   const [number, setNumber] = useState(employee?.employeeNumber ?? '');
   const [notes, setNotes] = useState(employee?.notes ?? '');
+  const [birthDate, setBirthDate] = useState(employee?.birthDate ?? '');
   const [versions, setVersions] = useState<SettingsVersion[]>([]);
   // A new employee inherits the business Friday-overtime setting (all other defaults are copied as before).
   const [settings, setSettings] = useState<EmployeeSettings>(() => {
-    const { fridayOvertimeHistory: _h, weeklyCreditHistory: _w, absence: _a, ...copy } = business.defaults;
-    return { ...copy, fridayOvertime: 'inherit', absence: {} }; // absence settings: all inherited from the business
+    const { fridayOvertimeHistory: _h, weeklyCreditHistory: _w, absence: _a, travel: _t, agreements: _g, ...copy } = business.defaults;
+    // Friday, absence and travel settings: inherited from the business; agreements are chosen per employee.
+    return { ...copy, fridayOvertime: 'inherit', absence: {}, travel: { mode: 'inherit' }, agreements: [] };
   });
   const [dirtySettings, setDirtySettings] = useState(false);
   const firstOfMonth = `${ym.year}-${String(ym.month).padStart(2, '0')}-01`;
@@ -301,10 +310,10 @@ function EmployeeForm({ business, employee, onClose, onSaved }: { business: Busi
     setBusy(true);
     try {
       if (!employee) {
-        await repo.createEmployee(business.id, { fullName, employeeNumber: number, notes, settings });
+        await repo.createEmployee(business.id, { fullName, employeeNumber: number, notes, birthDate: birthDate || null, settings });
         ui.toast('העובד נוסף');
       } else {
-        await repo.updateEmployee(business.id, employee.id, { fullName, employeeNumber: number, notes });
+        await repo.updateEmployee(business.id, employee.id, { fullName, employeeNumber: number, notes, birthDate: birthDate || null });
         if (dirtySettings) {
           const existing = versions.find((v) => v.effectiveFrom === effectiveFrom);
           const later = versions.some((v) => v.effectiveFrom > effectiveFrom);
@@ -396,6 +405,9 @@ function EmployeeForm({ business, employee, onClose, onSaved }: { business: Busi
           <Field label="מספר עובד (אופציונלי)">
             <input className="field-input num text-left" value={number} onChange={(e) => setNumber(e.target.value)} />
           </Field>
+          <Field label="תאריך לידה" hint={birthDate ? `גיל היום: ${ageOn(birthDate, new Date().toISOString().slice(0, 10))} — כללי עבודת נוער נבדקים לפי הגיל בכל תאריך עבודה` : 'לא חובה. בלי תאריך לידה — הסיווג לפי גיל אינו מאומת (חלים כללי עובד בגיר)'}>
+            <input type="date" lang="he" className="field-input num" value={birthDate} max={new Date().toISOString().slice(0, 10)} onChange={(e) => setBirthDate(e.target.value)} data-testid="employee-birthdate" />
+          </Field>
           <Field label="הערות" className="col-span-2">
             <textarea className="field-input min-h-20" value={notes} onChange={(e) => setNotes(e.target.value)} />
           </Field>
@@ -438,6 +450,7 @@ function EmployeeForm({ business, employee, onClose, onSaved }: { business: Busi
           <SettingsEditor
             businessFriday={businessFridayOn(businessFridayHistory(business.defaults), '9999-12-31')}
             businessAbsence={{ ...business.defaults.absence, weeklyCredit: businessWeeklyCreditOn(businessWeeklyCreditHistory(business.defaults), '9999-12-31') }}
+            businessTravel={business.defaults.travel}
             value={settings}
             onChange={(s) => {
               setSettings(s);

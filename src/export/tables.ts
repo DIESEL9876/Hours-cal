@@ -14,6 +14,8 @@ import {
   type PeriodTotals,
 } from '../engine';
 import { formatDateHe, STATUS_LABELS } from '../ui/format';
+import type { MonthlyAdjustment } from '../data/repo';
+import { ADJUSTMENT_LABELS, type MonthFinancials, type sumFinancials } from '../payroll/financials';
 
 /** 'days' holds HUNDREDTHS of a day (fractional day counts, summed exactly from the daily records). */
 export type Cell = { kind: 'text'; v: string } | { kind: 'dur'; v: number } | { kind: 'int'; v: number } | { kind: 'days'; v: number } | { kind: 'money'; v: number | null };
@@ -24,6 +26,8 @@ export interface Table {
   rows: Cell[][];
   /** Index of the totals row (rendered bold), if any. */
   totalRow: number | null;
+  /** CSV: append this table after the main one (CSV has a single sheet). */
+  csvAppend?: boolean;
 }
 
 const T = (v: string): Cell => ({ kind: 'text', v });
@@ -174,7 +178,25 @@ function businessAttendanceCells(a: AttendanceTotals): Cell[] {
   ];
 }
 
-export function businessMonthTable(title: string, s: BusinessSummary, includePay: boolean): Table {
+/** Payroll-preparation columns (₪, 1.1.9) — never hours. */
+export const BUSINESS_PAY_HEADERS = ['ערך היעדרויות (הערכה, ₪)', 'נסיעות (₪)', 'בונוס (₪)', 'דמי הבראה (₪)', 'מילואים (₪)', 'תוספות אחרות (₪)', 'מקדמות (₪)', 'ניכויים שאושרו (₪)', 'החזרים למעסיק (₪)'];
+function payCells(f: MonthFinancials | null): Cell[] {
+  const m = (v: number | undefined): Cell => ({ kind: 'money', v: v ?? 0 });
+  return [
+    m(f?.absenceEstimateAgorot),
+    m(f?.travel.totalAgorot),
+    m(f?.byCategory.bonus),
+    m(f?.byCategory.recuperation),
+    m(f?.byCategory.reserve),
+    m(f?.byCategory.other),
+    m(f?.byCategory.advance),
+    m(f?.totals.authorizedDeductionsAgorot),
+    m(f?.totals.employerReimbursementsAgorot),
+  ];
+}
+type BusinessFin = { byEmployee: Map<string, MonthFinancials>; totals: ReturnType<typeof sumFinancials> } | null;
+
+export function businessMonthTable(title: string, s: BusinessSummary, includePay: boolean, fin: BusinessFin = null): Table {
   const headers = [
     'עובד',
     'מספר עובד',
@@ -190,6 +212,7 @@ export function businessMonthTable(title: string, s: BusinessSummary, includePay
     'סך הפסקות',
     ...BUSINESS_ATTENDANCE_HEADERS,
     ...(includePay ? ['הערכת עלות (₪)'] : []),
+    ...(fin ? BUSINESS_PAY_HEADERS : []),
     'פריטים פתוחים',
   ];
   const row = (name: string, num: string, t: PeriodTotals, a: AttendanceTotals): Cell[] => {
@@ -209,12 +232,49 @@ export function businessMonthTable(title: string, s: BusinessSummary, includePay
       D(t.breakMinutes),
       ...businessAttendanceCells(a),
       ...(includePay ? [{ kind: 'money', v: t.payAgorot } as Cell] : []),
+      ...(fin ? payCells(f) : []),
       T(issuesText(t)),
     ];
   };
-  const rows = s.rows.map((r) => row(r.name, r.employeeNumber ?? '', r.totals, r.result.attendance));
+  let f: MonthFinancials | null = null;
+  const rows = s.rows.map((r) => {
+    f = fin?.byEmployee.get(r.employeeId) ?? null;
+    return row(r.name, r.employeeNumber ?? '', r.totals, r.result.attendance);
+  });
+  if (fin) {
+    const t = fin.totals;
+    f = {
+      absenceEstimateAgorot: t.absenceEstimateAgorot,
+      travel: { totalAgorot: t.travelAgorot },
+      byCategory: t.byCategory,
+      totals: t,
+    } as unknown as MonthFinancials;
+  }
   rows.push(row('סה״כ לעסק', '', s.grandTotal, s.attendanceTotal));
   return { title, headers, rows, totalRow: rows.length - 1 };
+}
+
+/** Monthly payroll components, one row per entry, plus travel and the absence estimate (1.1.9). */
+export function payrollItemsTable(title: string, rows: { name: string; number: string; f: MonthFinancials; items: MonthlyAdjustment[] }[]): Table {
+  const headers = ['עובד', 'מספר עובד', 'סוג', 'סכום (₪)', 'תאריך', 'תיאור', 'טיפול חשבונאי', 'פרטים'];
+  const out: Cell[][] = [];
+  const TREAT: Record<string, string> = { gross_addition: 'תוספת ברוטו', advance: 'מקדמה', employer_reimbursement: 'החזר למעסיק', informational: 'לידיעה בלבד' };
+  for (const r of rows) {
+    for (const a of r.items) {
+      const det =
+        a.category === 'advance'
+          ? `הוצע להחזר ${((a.details.advance?.proposedRecoveryAgorot ?? 0) / 100).toFixed(2)} · אושר לניכוי ${((a.details.advance?.authorizedDeductionAgorot ?? 0) / 100).toFixed(2)}${a.details.advance?.authorization ? ` (${a.details.advance.authorization})` : ''}`
+          : a.category === 'reserve'
+            ? (a.details.reserve?.kind ?? 'manual')
+            : '';
+      out.push([T(r.name), T(r.number), T(ADJUSTMENT_LABELS[a.category]), { kind: 'money', v: a.amountAgorot }, T(a.date ? formatDateHe(a.date) : ''), T(a.description ?? ''), T(TREAT[a.treatment] ?? a.treatment), T(det)]);
+    }
+    if (r.f.travel.totalAgorot > 0)
+      out.push([T(r.name), T(r.number), T('החזר נסיעות'), { kind: 'money', v: r.f.travel.totalAgorot }, T(''), T(r.f.travel.notes[0] ?? ''), T('תוספת ברוטו'), T(r.f.travel.overrideReason ? `תוקן ידנית: ${r.f.travel.overrideReason}` : '')]);
+    if (r.f.absenceEstimateAgorot > 0)
+      out.push([T(r.name), T(r.number), T('ערך היעדרויות (הערכה)'), { kind: 'money', v: r.f.absenceEstimateAgorot }, T(''), T('שיטת חישוב לפי הגדרת העסק — אינה הסכום לפי החוק'), T('לידיעה בלבד'), T('')]);
+  }
+  return { title, headers, rows: out, totalRow: null };
 }
 
 export function businessDetailTable(title: string, s: BusinessSummary): Table {

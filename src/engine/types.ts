@@ -115,6 +115,47 @@ export interface EmployeeSettings {
   absence?: AbsenceSettings;
   /** Business defaults only: when the weekly-credit policy changed (never reaches into finalised months). */
   weeklyCreditHistory?: WeeklyCreditChange[];
+  /** Travel-expense reimbursement (1.1.9). Employees: mode 'inherit' (or absent) = the business setting. */
+  travel?: TravelSettings;
+  /** Collective agreements / extension orders selected for this employee (1.1.9) — see src/agreements. */
+  agreements?: AgreementSelection[];
+}
+
+export type TravelMode = 'none' | 'monthly' | 'daily';
+export interface TravelSettings {
+  mode: TravelMode | 'inherit';
+  /** NIS amount in agorot: per month ('monthly') or per eligible travel day ('daily'). */
+  amountAgorot?: number | null;
+}
+
+/** An agreement chosen for an employee. Rules are used only after the applicability confirmation. */
+export interface AgreementSelection {
+  catalogId: string;
+  /** Applicability confirmation (who / when / on what basis). Absent = reference only, no rules applied. */
+  confirmation?: {
+    by: string;
+    at: string;
+    industry: string;
+    occupation: string;
+    employmentStart: string | null;
+    note?: string;
+  } | null;
+  /**
+   * A payroll professional verified THIS profile version against the official text (name, date, version).
+   * Required before a secondary-source profile may change calculations.
+   */
+  professionalVerification?: { by: string; at: string; version: string } | null;
+}
+
+/** Thresholds taken from a VERIFIED agreement rule profile (applied by the engine like a contractual profile). */
+export interface AgreementHoursRule {
+  from: LocalDate;
+  to: LocalDate | null;
+  dailyThresholdMinutes: number[];
+  weeklyThresholdMinutes: number;
+  firstTierMinutes: number;
+  /** Hebrew citation shown in explanations. */
+  source: string;
 }
 
 /**
@@ -137,7 +178,8 @@ export interface FridayPolicyChange {
 
 export type SalaryType = 'monthly' | 'hourly' | 'daily';
 /** How the hours of a paid absence day are determined. 'auto' = schedule for monthly, 3-month average for hourly/daily. */
-export type PaidDayReference = 'auto' | 'schedule' | 'average_3m' | 'fixed';
+/** Hours of a full paid absence day: 'average_month' = actual worked average of the absence month; 'average_3m' = of the 3 complete months before it (1.1.9). */
+export type PaidDayReference = 'auto' | 'schedule' | 'average_3m' | 'average_month' | 'fixed';
 /** 'statutory' = Annual Leave Law (full pay); 'manual' = no automatic payment (enter it per day). */
 export type VacationProfile = 'statutory' | 'manual';
 /** 'statutory' = Sick Pay Law s.2 (0% / 50% / 50% / 100%); others are more favourable arrangements. */
@@ -211,6 +253,14 @@ export interface DayAttendance {
   payableEquivalentMinutes: number;
   /** Payable day-equivalent of the date, hundredths (0–100). */
   paidDayHundredths: number;
+  /**
+   * Office estimate of the absence's monetary value (agorot): base hourly rate × equivalent hours (1.1.9).
+   * "שיטת חישוב לפי הגדרת העסק" — not the statutory amount. 0 when not applicable (see valueBasis).
+   */
+  estimatedValueAgorot: number;
+  /** 'office' = estimate computed; 'in_salary' = monthly employee (paid within the salary, no extra payment);
+   *  'statutory_formula' = reserve duty (National Insurance formula, never hourly); 'no_rate' = no hourly rate; 'none'. */
+  valueBasis: 'office' | 'in_salary' | 'statutory_formula' | 'no_rate' | 'none';
   /** The paid-absence part of paidDayHundredths (absent portion × rate), hundredths. */
   paidAbsenceDayHundredths: number;
   /** Day number within a continuous sickness period (calendar days). */
@@ -241,6 +291,10 @@ export interface AttendanceTotals {
   unpaidDayHundredths: number;
   /** Absence days whose entitlement needs a human check. */
   reviewDays: number;
+  /** Office estimate of paid absences (agorot), see DayAttendance.estimatedValueAgorot (1.1.9). */
+  estimatedAbsenceValueAgorot: number;
+  /** Reserve-duty absence days (nominal reporting only; compensation follows the National Insurance formula). */
+  reserveDayHundredths: number;
 }
 
 export interface SettingsVersion {
@@ -460,6 +514,28 @@ export interface EmployeePeriodInput {
    * averages look back this far). Default: the start of the weekly data range.
    */
   historyFrom?: LocalDate;
+  /** Date of birth (1.1.9). Present → age-dependent (youth) rules are checked per attendance date. */
+  birthDate?: LocalDate | null;
+  /** Per-month manual value of a paid absence day (minutes), with the reason (1.1.9). */
+  paidDayOverrides?: { ym: string; minutes: number; reason: string }[];
+  /** Hours thresholds from verified agreement profiles (1.1.9). */
+  agreementHours?: AgreementHoursRule[];
+}
+
+/** How a full paid absence day was valued in the reporting month (1.1.9). */
+export interface PaidDayInfo {
+  method: 'schedule' | 'fixed' | 'average_month' | 'average_3m' | 'override';
+  /** Reference period of an average. */
+  from: LocalDate | null;
+  to: LocalDate | null;
+  workedDays: number;
+  workedMinutes: number;
+  /** Minutes of a full paid absence day (null = cannot be determined). */
+  dayMinutes: number | null;
+  insufficient: boolean;
+  /** The value calculated before a manual override. */
+  calculatedMinutes?: number | null;
+  overrideReason?: string;
 }
 
 export interface EmployeePeriodResult {
@@ -474,4 +550,8 @@ export interface EmployeePeriodResult {
   warnings: Warning[];
   /** Actual vs. paid attendance totals of the period (1.1.7) — sums of days[].attendance. */
   attendance: AttendanceTotals;
+  /** Valuation of a full paid absence day in the reporting month (1.1.9). */
+  paidDay?: PaidDayInfo;
+  /** Age-dependent classification (1.1.9): youth days found, or unverified when no birth date is stored. */
+  age?: { birthDate: LocalDate | null; youthDays: number; turns18: LocalDate | null };
 }

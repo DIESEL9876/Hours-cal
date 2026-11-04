@@ -110,6 +110,38 @@ export const MIGRATIONS: Migration[] = [
     description: '1.1.7 paid absences: absence details per day (additive, nullable)',
     statements: [`ALTER TABLE day_entries ADD COLUMN absence_json TEXT`],
   },
+  {
+    version: 3,
+    description: '1.1.9 payroll preparation: birth date, monthly adjustments, per-month overrides, rule versions of closed months (additive)',
+    statements: [
+      `ALTER TABLE employees ADD COLUMN birth_date TEXT`,
+      `CREATE TABLE monthly_adjustments (
+        id TEXT PRIMARY KEY,
+        business_id TEXT NOT NULL REFERENCES businesses(id),
+        employee_id TEXT NOT NULL REFERENCES employees(id),
+        year_month TEXT NOT NULL CHECK (length(year_month) = 7),
+        category TEXT NOT NULL CHECK (category IN ('advance', 'bonus', 'recuperation', 'reserve', 'other')),
+        amount_agorot INTEGER NOT NULL CHECK (amount_agorot >= 0),
+        entry_date TEXT,
+        description TEXT,
+        treatment TEXT NOT NULL,
+        details_json TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        deleted_at TEXT
+      )`,
+      `CREATE INDEX ix_adjustments_month ON monthly_adjustments(business_id, year_month, employee_id)`,
+      `CREATE TABLE employee_months (
+        employee_id TEXT NOT NULL REFERENCES employees(id),
+        business_id TEXT NOT NULL REFERENCES businesses(id),
+        year_month TEXT NOT NULL,
+        data_json TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (employee_id, year_month)
+      )`,
+      `ALTER TABLE month_reviews ADD COLUMN rules_json TEXT`,
+    ],
+  },
 ];
 
 export const SCHEMA_VERSION = MIGRATIONS[MIGRATIONS.length - 1].version;

@@ -43,8 +43,8 @@ export interface NewBusinessDraft {
 
 /** Settings a new employee receives: the business defaults, Friday and absence settings "לפי הגדרת העסק". */
 export function inheritedSettings(defaults: EmployeeSettings): EmployeeSettings {
-  const { fridayOvertimeHistory: _f, weeklyCreditHistory: _w, absence: _a, ...copy } = defaults;
-  return { ...copy, fridayOvertime: 'inherit', absence: {} };
+  const { fridayOvertimeHistory: _f, weeklyCreditHistory: _w, absence: _a, travel: _t, agreements: _g, ...copy } = defaults;
+  return { ...copy, fridayOvertime: 'inherit', absence: {}, travel: { mode: 'inherit' }, agreements: [] };
 }
 
 const actionValue = (a: BulkAction | null) => (a === null ? '' : a.kind === 'existing' ? `existing:${a.employeeId}` : a.kind === 'merge' ? `merge:${a.into}` : a.kind);
@@ -339,6 +339,7 @@ export function BulkImportWizard({
                 onChange={setSettings}
                 businessFriday={businessFridayOn(businessFridayHistory(defaults), '9999-12-31')}
                 businessAbsence={{ ...defaults.absence, weeklyCredit: businessWeeklyCreditOn(businessWeeklyCreditHistory(defaults), '9999-12-31') }}
+                businessTravel={defaults.travel}
               />
               {settingsErrors.length > 0 && <div className="mt-2 text-[12px] text-red-700">{settingsErrors.join(' · ')}</div>}
             </div>
