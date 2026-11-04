@@ -212,10 +212,21 @@ describe('paid-day override for a month', () => {
 });
 
 describe('agreements catalog and rules', () => {
+  const fullConfirmation = {
+    by: 'מנהלת השכר',
+    at: '2026-11-03',
+    industry: 'מסחר',
+    occupation: 'קופאי',
+    employmentStart: '2024-01-01',
+    employeeClass: 'other' as const,
+    fullTextReviewed: true,
+    amendmentsChecked: true,
+    exclusionsChecked: true,
+  };
+
   it('search by name, industry, keyword; metadata and sources present', () => {
     expect(searchCatalog('הבראה').map((e) => e.id)).toEqual(['eo-recuperation']);
-    expect(searchCatalog('שמירה').map((e) => e.id)).toEqual(['eo-security']);
-    expect(searchCatalog('צו הרחבה ענפי').length).toBe(3);
+    expect(searchCatalog('שמירה').map((e) => e.id)).toEqual(['eo-security', 'coll-017']);
     expect(searchCatalog('').length).toBe(CATALOG.length);
     for (const e of CATALOG) {
       expect(e.sourceUrl).toMatch(/^https:\/\/www\.gov\.il\//);
@@ -224,31 +235,41 @@ describe('agreements catalog and rules', () => {
     }
   });
 
-  it('selection alone is reference only; confirmation + professional verification activate a profile', () => {
+  // 1.1.10: selection and a 1.1.9 whole-profile verification are no longer enough — each clause needs its own check.
+  it('selection is reference only; only a complete confirmation + a verified clause activates it', () => {
     const none = resolveAgreements([{ catalogId: 'eo-recuperation' }], '2026-01-15');
-    expect(none.instruments[0]).toMatchObject({ confirmed: false, executable: false, status: 'ממתין לאישור תחולה על העובד' });
+    expect(none.instruments[0]).toMatchObject({ confirmed: false, executable: false });
+    expect(none.instruments[0].status).toContain('תחולה בבדיקה');
     expect(none.recuperation?.executable).toBe(false);
-    const confirmation = { by: 'מנהלת השכר', at: '2026-11-03', industry: 'מסחר', occupation: 'קופאי', employmentStart: '2024-01-01' };
-    const confirmed = resolveAgreements([{ catalogId: 'eo-recuperation', confirmation }], '2026-01-15');
+    const legacy = { by: 'מנהלת השכר', at: '2026-11-03', industry: 'מסחר', occupation: 'קופאי', employmentStart: '2024-01-01' };
+    const old = resolveAgreements([{ catalogId: 'eo-recuperation', confirmation: legacy, professionalVerification: { by: 'רו"ח כהן', at: '2026-11-03', version: '2026' } }], '2026-01-15');
+    expect(old.recuperation?.executable).toBe(false);
+    expect(old.instruments[0].status).toContain('תחולה בבדיקה');
+    const confirmed = resolveAgreements([{ catalogId: 'eo-recuperation', confirmation: fullConfirmation }], '2026-01-15');
     expect(confirmed.instruments[0].status).toContain(NOT_VERIFIED_TEXT);
-    const verified = resolveAgreements([{ catalogId: 'eo-recuperation', confirmation, professionalVerification: { by: 'רו"ח כהן', at: '2026-11-03', version: '2026' } }], '2026-01-15');
+    expect(confirmed.reviews.join()).toContain('דורש בדיקה מקצועית');
+    const clause = { profileVersion: '2026', clause: 'recuperation' as const, clauseRef: 'סעיף 2', effectiveFrom: '2025-07-01', by: 'רו"ח כהן', at: '2026-11-03' };
+    const verified = resolveAgreements([{ catalogId: 'eo-recuperation', confirmation: fullConfirmation, clauseVerifications: [clause] }], '2026-01-15');
     expect(verified.recuperation).toMatchObject({ executable: true, rule: { dayValueAgorot: 45150 } });
+    expect(verified.instruments[0].status).toContain('כללים מאומתים');
+    // Before the clause's verified effective date it does not apply.
+    expect(resolveAgreements([{ catalogId: 'eo-recuperation', confirmation: fullConfirmation, clauseVerifications: [{ ...clause, effectiveFrom: '2026-02-01' }] }], '2026-01-15').recuperation?.executable).toBe(false);
     expect(recuperationDays(verified.recuperation!.rule, 0)).toBeNull();
     expect(recuperationDays(verified.recuperation!.rule, 3)).toBe(6);
     expect(recuperationDays(verified.recuperation!.rule, 25)).toBe(10);
   });
 
   it('metadata-only and unlisted agreements never execute; dates out of force are reported', () => {
-    const r = resolveAgreements([{ catalogId: 'eo-security', confirmation: { by: 'x', at: 't', industry: 'שמירה', occupation: 'מאבטח', employmentStart: null } }, { catalogId: UNLISTED_ID }], '2026-11-01');
+    const r = resolveAgreements([{ catalogId: 'eo-security', confirmation: { ...fullConfirmation, employeeClass: 'contractor_worker' } }, { catalogId: UNLISTED_ID }], '2026-11-01');
     expect(r.instruments.every((i) => !i.executable)).toBe(true);
     expect(r.hours).toBeNull();
     expect(catalogEntry('eo-short-week-2018')!.startDate).toBe('2018-04-01');
     expect(resolveAgreements([{ catalogId: 'eo-short-week-2018' }], '2017-06-01').instruments[0].status).toBe('אינו בתוקף בתאריך זה');
   });
 
-  it('two selected instruments are resolved by precedence; monetary conflicts take the favourable value with a review', () => {
+  it('instruments are listed by precedence; values are informational until verified', () => {
     const r = resolveAgreements([{ catalogId: 'eo-travel' }, { catalogId: 'eo-recuperation' }, { catalogId: 'eo-short-week-2018' }], '2026-02-01');
     expect(r.instruments.map((i) => i.id)).toEqual(['eo-travel', 'eo-recuperation', 'eo-short-week-2018']);
-    expect(r.travel?.rule.dailyCapAgorot).toBe(2260);
+    expect(r.travel).toMatchObject({ executable: false, rule: { dailyCapAgorot: 2260 } });
   });
 });

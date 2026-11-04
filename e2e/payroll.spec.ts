@@ -23,6 +23,9 @@ test('payroll components, youth, travel, paid-day value and agreements', async (
   await page.getByRole('button', { name: 'הוספת עובד' }).first().click();
   await page.getByTestId('employee-name-input').fill('נועה הצעירה');
   await page.getByTestId('employee-birthdate').fill('2009-06-01');
+  // Youth details (1.1.10): never inferred from the date of birth.
+  await expect(page.getByTestId('youth-details')).toBeVisible();
+  await page.getByLabel('חובת לימוד').selectOption('not_compulsory');
   await page.getByRole('radio', { name: 'הגדרות חישוב' }).click();
   await page.getByText('שכר שעתי (₪, אופציונלי)').locator('..').locator('input').fill('40');
   await page.getByTestId('absence-settings').getByText('סוג העסקה').locator('..').locator('select').selectOption('hourly');
@@ -31,17 +34,32 @@ test('payroll components, youth, travel, paid-day value and agreements', async (
   await page.getByLabel('שיטת חישוב ערך יום היעדרות').selectOption('average');
   await page.getByLabel('תקופת הממוצע').selectOption('average_month');
   await page.getByTestId('agreement-field').click();
+  await expect(page.getByTestId('official-links')).toContainText('מאגר צווי ההרחבה');
+  await page.getByRole('radio', { name: 'הסכמים קיבוציים' }).click();
+  await expect(page.getByTestId('agreement-option')).toHaveCount(0); // agreements are kept apart; none catalogued
+  await page.getByRole('radio', { name: 'הכל' }).click();
   await page.getByLabel('חיפוש הסכם').fill('הבראה');
   await expect(page.getByTestId('agreement-option')).toHaveCount(1);
+  await expect(page.getByTestId('agreement-option')).toContainText('המקור אותר; הוראות החישוב לא אומתו');
   await page.getByTestId('agreement-option').getByRole('button', { name: 'בחירה' }).click();
-  await expect(page.getByTestId('agreement-selected')).toContainText('ממתין לאישור תחולה');
+  await expect(page.getByTestId('agreement-selected')).toContainText('תחולה בבדיקה');
   await page.getByTestId('agreement-selected').getByRole('button', { name: 'אישור תחולה' }).click();
   await page.getByLabel('ענף העסק').fill('מסחר');
   await page.getByLabel('עיסוק העובד').fill('קופאית');
+  await page.getByLabel('סיווג העובד').selectOption('other');
   await page.getByLabel('שם המאשר').fill('מנהלת השכר');
-  await page.getByLabel('המעסיק והעובד בתחולת ההסכם').check();
+  for (const c of ['המעסיק והעובד בתחולת ההסכם', 'קראתי את הנוסח המלא', 'נבדקו תיקונים', 'נבדקו החרגות']) await page.getByLabel(c).check();
   await page.getByTestId('confirm-applicability').click();
   await expect(page.getByTestId('agreement-selected')).toContainText('הוראות ההסכם טרם אומתו');
+  // A construction order cannot be confirmed for an office employee.
+  await page.getByLabel('חיפוש הסכם').fill('COLL-005');
+  await page.getByTestId('agreement-option').getByRole('button', { name: 'בחירה' }).click();
+  await page.getByTestId('agreement-selected').locator('li').filter({ hasText: 'בנייה' }).getByRole('button', { name: 'אישור תחולה' }).click();
+  await page.getByLabel('סיווג העובד').selectOption('office_staff');
+  await expect(page.getByTestId('applicability-blocked')).toBeVisible();
+  await expect(page.getByTestId('confirm-applicability')).toBeDisabled();
+  await page.getByRole('dialog').last().getByRole('button', { name: 'סגירה', exact: true }).last().click();
+  await page.getByTestId('agreement-selected').locator('li').filter({ hasText: 'בנייה' }).getByRole('button', { name: 'הסרה' }).click();
   await page.getByTestId('save-employee').click();
 
   // Button placement: the new button is immediately to the RIGHT of "פתיחת דוח שעות" (RTL), same size class.
@@ -72,6 +90,9 @@ test('payroll components, youth, travel, paid-day value and agreements', async (
   await page.getByTestId('details-2026-11-03').click();
   await expect(page.getByText('העסקת נער בשעות נוספות אסורה').first()).toBeVisible();
   await page.keyboard.press('Escape');
+  // Recorded vs prohibited (kept apart; nothing deducted): 17-year-old, five-day week, 10:00 net → 1:00 above 9:00.
+  await expect(page.getByTestId('youth-summary')).toContainText('15:00');
+  await expect(page.getByTestId('youth-prohibited')).toHaveText('1:00');
   await page.getByTestId('day-type-2026-11-04').selectOption('vacation');
   await expect(page.getByTestId('pay-absence')).toHaveText('₪300.00'); // average 7:30 × 40 ₪
   await expect(page.getByTestId('pay-travel')).toHaveText('₪30.00'); // 2 worked dates × 15 ₪

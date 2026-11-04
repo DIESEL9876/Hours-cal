@@ -295,3 +295,31 @@ export function businessDetailTable(title: string, s: BusinessSummary): Table {
   }
   return { title, headers, rows, totalRow: null };
 }
+
+/**
+ * Youth employment summary (1.1.10): recorded hours (all payable), prohibited work and items for review — kept
+ * separate from hours and pay. Includes every youth warning with its legal rule id.
+ */
+export function youthTable(title: string, rows: { name: string; number: string; result: EmployeePeriodResult }[]): Table | null {
+  const withYouth = rows.filter((r) => r.result.youth);
+  if (!withYouth.length) return null;
+  const headers = ['עובד', 'מספר עובד', 'תאריך', 'נושא', 'כלל', 'חומרה', 'פירוט'];
+  const out: Cell[][] = [];
+  const SEV: Record<string, string> = { compliance: 'ציות (העסקה אסורה)', review: 'לבדיקה', error: 'שגיאה', info: 'מידע' };
+  for (const r of withYouth) {
+    const y = r.result.youth!;
+    out.push([T(r.name), T(r.number), T(''), T('שעות שנרשמו (כולן משולמות)'), T(''), T(''), { kind: 'dur', v: y.recordedMinutes }]);
+    out.push([T(r.name), T(r.number), T(''), T('שעות נוספות אסורות (עודף יומי ואחריו שבועי)'), T('Y-001…Y-005'), T(''), { kind: 'dur', v: y.prohibitedOvertimeMinutes }]);
+    out.push([T(r.name), T(r.number), T(''), T('עבודת לילה אסורה'), T('Y-014'), T(''), { kind: 'dur', v: y.nightProhibitedMinutes }]);
+    out.push([T(r.name), T(r.number), T(''), T('עבודה ביום המנוחה'), T('Y-006'), T(''), { kind: 'dur', v: y.restDayMinutes }]);
+    const ws = [...r.result.days.flatMap((d) => d.warnings), ...r.result.warnings].filter((w) => w.code.startsWith('YOUTH_'));
+    const seen = new Set<string>();
+    for (const w of ws) {
+      const k = `${w.date}|${w.code}`;
+      if (seen.has(k)) continue;
+      seen.add(k);
+      out.push([T(r.name), T(r.number), T(w.date ?? ''), T(w.code), T(w.ruleId ?? ''), T(SEV[w.severity] ?? w.severity), T(w.message)]);
+    }
+  }
+  return { title, headers, rows: out, totalRow: null };
+}

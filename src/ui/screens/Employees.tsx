@@ -12,6 +12,7 @@ import {
   type BusinessSummary,
   type EmployeeSettings,
   type SettingsVersion,
+  type YouthProfile,
 } from '../../engine';
 import type { AuditEntry, Business, Employee } from '../../data/repo';
 import { computeBusinessMonth } from '../../data/service';
@@ -22,6 +23,7 @@ import { BULK_ACCEPT, BulkImportWizard } from './BulkImport';
 import { PayrollItemsDialog } from './PayrollItems';
 import { MonthPicker } from '../MonthPicker';
 import { SettingsEditor } from '../SettingsEditor';
+import { YouthDetails } from '../YouthDetails';
 import { formatDateHe, formatTimestamp, hm, monthTitle, scheduleLabel, weekdayName } from '../format';
 
 interface Row {
@@ -282,6 +284,7 @@ function EmployeeForm({ business, employee, onClose, onSaved }: { business: Busi
   const [number, setNumber] = useState(employee?.employeeNumber ?? '');
   const [notes, setNotes] = useState(employee?.notes ?? '');
   const [birthDate, setBirthDate] = useState(employee?.birthDate ?? '');
+  const [youth, setYouth] = useState<YouthProfile | null>(employee?.youth ?? null);
   const [versions, setVersions] = useState<SettingsVersion[]>([]);
   // A new employee inherits the business Friday-overtime setting (all other defaults are copied as before).
   const [settings, setSettings] = useState<EmployeeSettings>(() => {
@@ -310,10 +313,10 @@ function EmployeeForm({ business, employee, onClose, onSaved }: { business: Busi
     setBusy(true);
     try {
       if (!employee) {
-        await repo.createEmployee(business.id, { fullName, employeeNumber: number, notes, birthDate: birthDate || null, settings });
+        await repo.createEmployee(business.id, { fullName, employeeNumber: number, notes, birthDate: birthDate || null, youth: birthDate ? youth : null, settings });
         ui.toast('העובד נוסף');
       } else {
-        await repo.updateEmployee(business.id, employee.id, { fullName, employeeNumber: number, notes, birthDate: birthDate || null });
+        await repo.updateEmployee(business.id, employee.id, { fullName, employeeNumber: number, notes, birthDate: birthDate || null, youth: birthDate ? youth : null });
         if (dirtySettings) {
           const existing = versions.find((v) => v.effectiveFrom === effectiveFrom);
           const later = versions.some((v) => v.effectiveFrom > effectiveFrom);
@@ -408,6 +411,7 @@ function EmployeeForm({ business, employee, onClose, onSaved }: { business: Busi
           <Field label="תאריך לידה" hint={birthDate ? `גיל היום: ${ageOn(birthDate, new Date().toISOString().slice(0, 10))} — כללי עבודת נוער נבדקים לפי הגיל בכל תאריך עבודה` : 'לא חובה. בלי תאריך לידה — הסיווג לפי גיל אינו מאומת (חלים כללי עובד בגיר)'}>
             <input type="date" lang="he" className="field-input num" value={birthDate} max={new Date().toISOString().slice(0, 10)} onChange={(e) => setBirthDate(e.target.value)} data-testid="employee-birthdate" />
           </Field>
+          {birthDate && ageOn(birthDate, new Date().toISOString().slice(0, 10)) < 19 && <YouthDetails value={youth} onChange={setYouth} />}
           <Field label="הערות" className="col-span-2">
             <textarea className="field-input min-h-20" value={notes} onChange={(e) => setNotes(e.target.value)} />
           </Field>

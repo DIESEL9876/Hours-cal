@@ -15,6 +15,9 @@ import {
   type LocalDate,
   resolveSettings,
   type SettingsVersion,
+  CURRENT_YOUTH_RULE_SET,
+  LEGAL_REGISTRY_VERSION,
+  type YouthRuleSet,
 } from '../engine';
 import { Repository, toDayStatuses, type Employee } from './repo';
 import { agreementHoursFor, resolveAgreements, rulesSnapshot } from '../agreements';
@@ -28,8 +31,23 @@ export async function extraEmployeeInput(repo: Repository, businessId: string, e
   const ym = from.slice(0, 7);
   const month = await repo.getEmployeeMonth(businessId, employee.id, ym);
   const settings = resolveSettings(versions, to)?.settings ?? null;
+  // A month finalised under 1.1.9 (no youth rule set recorded) keeps the 1.1.9 youth rules (Y1): a later correction
+  // of the rules never rewrites a closed month.
+  const review = await repo.getMonthReview(businessId, ym);
+  let youthRuleSet: YouthRuleSet = CURRENT_YOUTH_RULE_SET;
+  if (review.status === 'final') {
+    let recorded: unknown = null;
+    try {
+      recorded = review.rulesJson ? (JSON.parse(review.rulesJson) as { youthRuleSet?: unknown }).youthRuleSet : null;
+    } catch {
+      recorded = null;
+    }
+    youthRuleSet = recorded === 'Y2' ? 'Y2' : 'Y1';
+  }
   return {
     birthDate: employee.birthDate ?? null,
+    youth: employee.youth ?? null,
+    youthRuleSet,
     paidDayOverrides: month.paidDayOverride ? [{ ym, minutes: month.paidDayOverride.minutes, reason: month.paidDayOverride.reason }] : [],
     agreementHours: agreementHoursFor(settings?.agreements, from, to),
   };
@@ -126,7 +144,7 @@ export async function closingRules(repo: Repository, businessId: string, year: n
   const { to } = monthRange(year, month);
   const employees = await repo.listEmployees(businessId);
   const per = await Promise.all(employees.map(async (e) => ({ employeeId: e.id, selections: resolveSettings(await repo.getSettingsVersions(e.id), to)?.settings.agreements })));
-  return rulesSnapshot(per, to);
+  return { ...rulesSnapshot(per, to), youthRuleSet: CURRENT_YOUTH_RULE_SET, legalRegistryVersion: LEGAL_REGISTRY_VERSION };
 }
 
 /** Canonical, calculated-data snapshot of a month (used to detect changes after finalisation). */

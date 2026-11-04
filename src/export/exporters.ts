@@ -6,7 +6,7 @@ import type { Business, Employee } from '../data/repo';
 import { isTauri } from '../data/tauriDriver';
 import { monthTitle } from '../ui/format';
 import { COPYRIGHT } from '../licensing/CopyrightFooter';
-import { businessDetailTable, businessMonthTable, employeeMonthTable, payrollItemsTable, type Cell, type Table } from './tables';
+import { businessDetailTable, businessMonthTable, employeeMonthTable, payrollItemsTable, youthTable, type Cell, type Table } from './tables';
 import type { MonthlyAdjustment } from '../data/repo';
 import type { MonthFinancials } from '../payroll/financials';
 
@@ -180,6 +180,8 @@ export async function exportEmployeeMonth(
   const table = employeeMonthTable('דוח שעות', result);
   const tables = [table];
   if (pay && (pay.items.length || pay.f.travel.totalAgorot || pay.f.absenceEstimateAgorot)) tables.push({ ...payrollItemsTable('רכיבי שכר', [{ name: employee.fullName, number: employee.employeeNumber ?? '', ...pay }]), csvAppend: true });
+  const youth = youthTable('נוער', [{ name: employee.fullName, number: employee.employeeNumber ?? '', result }]);
+  if (youth) tables.push({ ...youth, csvAppend: true });
   return emit(format, title, tables, { title, subtitle: generatedLine(business.name) });
 }
 
@@ -202,6 +204,8 @@ export async function exportBusinessMonth(
     );
     tables.push({ ...pay, csvAppend: true });
   }
+  const youth = youthTable('נוער', summary.rows.map((r) => ({ name: r.name, number: r.employeeNumber ?? '', result: r.result })));
+  if (youth) tables.push({ ...youth, csvAppend: true });
   return emit(format, title, tables, { title, subtitle: `${generatedLine(business.name)} · ${statusLine}` });
 }
 

@@ -15,6 +15,7 @@ under the Israeli Hours of Work and Rest framework. Full Hebrew RTL interface.
 | [`docs/LEGAL_RULES.md`](docs/LEGAL_RULES.md) | Every rule applied, its source, verification status/date, and the exact algorithm |
 | [`docs/REVIEW_CASES.md`](docs/REVIEW_CASES.md) | Exceptional cases that require human payroll review (with flag codes) |
 | [`docs/USER_GUIDE_HE.md`](docs/USER_GUIDE_HE.md) | Short Hebrew user guide |
+| [`docs/LEGAL_AUDIT_1.1.10.md`](docs/LEGAL_AUDIT_1.1.10.md) | 1.1.10: audit of 1.1.9 against the legal research pack — correct / changed / not automatable, and the source and effective date of each activated rule |
 | [`docs/RELEASE_1.1.9_REPORT.md`](docs/RELEASE_1.1.9_REPORT.md) | 1.1.9: calculation verification, legal sources, agreements coverage, rules needing professional review, data-survival confirmation |
 | [`docs/LICENSE_MANAGER_GUIDE_HE.md`](docs/LICENSE_MANAGER_GUIDE_HE.md) | Hebrew guide for the owner-only License Manager (key setup, issuing, registry, backups, go-live) |
 
@@ -188,6 +189,27 @@ Rules and sources: `docs/LEGAL_RULES.md` §11. Verification and coverage: `docs/
 - **Outputs:** totals bar, business monthly summary columns, Excel ("רכיבי שכר" sheet), CSV (appended table), print.
 - **Data:** migration v3 is additive (`employees.birth_date`, `monthly_adjustments`, `employee_months`, `month_reviews.rules_json`). A pre-migration backup is taken first.
 - **Tests:** `src/engine/__tests__/payroll119.test.ts`, `src/data/__tests__/payroll119.test.ts`, `e2e/payroll.spec.ts`.
+
+## Legal corrections (1.1.10)
+
+- **Rule registry:** `src/engine/legalRules.ts`. Rule ids Y-001…Y-017, each with its source URL, evidence class, effective dates, mode and tests. Every youth warning carries its `ruleId`.
+- **Youth rule set Y2** (`src/engine/youth.ts`):
+  - night windows depend on schooling status;
+  - the 2024 school-vacation exception until 01:00 is a conditions review;
+  - recorded night permits are honoured only within their validity and hour;
+  - breaks are judged on actual breaks only;
+  - the holiday-eve limit applies only before a holiday the minor does not work;
+  - minimum age 14 on a school vacation; apprentice rate only with a document;
+  - youth vacation is flagged;
+  - figures are reported separately: recorded / prohibited (daily, then weekly) / night / rest day.
+- **Y1** (1.1.9) is frozen and used for months closed under 1.1.9.
+- **Agreements** (`src/agreements/`):
+  - seed catalog COLL-001…018 with evidence classes, families and amendment relations;
+  - employee-class scope;
+  - a clause-level execution gate;
+  - no cherry-picking between instruments.
+- **Data:** migration v4 (`employees.youth_json`, additive).
+- **Tests:** `src/engine/__tests__/legal1110.test.ts`, `src/data/__tests__/legal1110.test.ts`, `e2e/payroll.spec.ts`.
 
 ## Licensing and legal agreement (since 1.1.3)
 

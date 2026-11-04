@@ -184,7 +184,8 @@ export function PayrollItemsDialog({ business, employee, ym, onClose, onChanged 
   const years = start ? Math.floor((Date.parse(monthRange(ym.year, ym.month).to) - Date.parse(start)) / (365.25 * 86400000)) : null;
   const recupDays = recup && years !== null ? recuperationDays(recup.rule, years) : null;
   const frac = Math.max(0, Math.min(100, Number(fraction) || 0));
-  const recupSuggestion = recup && recupDays !== null ? Math.round((recup.rule.dayValueAgorot * recupDays * frac) / 100) : null;
+  // A suggested amount is calculated only from a VERIFIED clause (1.1.10); otherwise the figures are reference only.
+  const recupSuggestion = recup?.executable && recupDays !== null ? Math.round((recup.rule.dayValueAgorot * recupDays * frac) / 100) : null;
 
   return (
     <Modal
@@ -468,7 +469,7 @@ export function PayrollItemsDialog({ business, employee, ym, onClose, onChanged 
             <h3 className="mb-1 text-[14px] font-semibold">עזר לחישוב דמי הבראה</h3>
             <div>
               {recup.source} · תעריף יום: <b className="num">{shekelsText(recup.rule.dayValueAgorot)}</b> (שנת הבראה {formatDateHe(recup.rule.yearFrom)}–{formatDateHe(recup.rule.yearTo)}) ·{' '}
-              {recup.executable ? <Badge tone="green">מאומת ומאושר לעובד</Badge> : <Badge tone="amber">הוראות ההסכם טרם אומתו — הצעה בלבד</Badge>}
+              {recup.executable ? <Badge tone="green">כללים מאומתים — סעיף אומת לעובד</Badge> : <Badge tone="amber">הוראות ההסכם טרם אומתו — לעיון בלבד, ללא הצעת סכום</Badge>}
             </div>
             <div className="mt-1">
               ותק: {years === null ? 'לא הוזן תאריך תחילת עבודה (בהגדרות ההיעדרות)' : `${years} שנים מלאות`} · ימים: {recupDays ?? (years !== null ? 'אין זכאות לפני שנה מלאה' : '—')}
@@ -477,8 +478,8 @@ export function PayrollItemsDialog({ business, employee, ym, onClose, onChanged 
               <Field label="היקף משרה (%)">
                 <input className="field-input num w-20 text-left" value={fraction} onChange={(e) => setFraction(e.target.value)} aria-label="היקף משרה" />
               </Field>
-              <div className="pb-2">
-                הצעה: <b className="num">{recupSuggestion !== null ? shekelsText(recupSuggestion) : '—'}</b>
+              <div className="pb-2" data-testid="recuperation-suggestion">
+                הצעה: <b className="num">{recupSuggestion !== null ? shekelsText(recupSuggestion) : recup.executable ? '—' : 'לא מחושבת — הסעיף לא אומת; דורש בדיקה מקצועית'}</b>
               </div>
               {recupSuggestion !== null && !final && (
                 <Button size="sm" onClick={() => setDraft({ ...emptyDraft(), category: 'recuperation', amount: (recupSuggestion / 100).toFixed(2), description: `${recupDays} ימי הבראה × ${shekelsText(recup.rule.dayValueAgorot)} × ${frac}%` })}>

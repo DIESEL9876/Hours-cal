@@ -15,6 +15,7 @@ import type {
   LocalDate,
   SettingsVersion,
   ShiftInput,
+  YouthProfile,
 } from '../engine/types';
 import {
   BEGINNING_OF_TIME,
@@ -49,6 +50,8 @@ export interface Employee {
   archivedAt: string | null;
   /** Date of birth (1.1.9, optional). Age-dependent (youth) rules use the age on each attendance date. */
   birthDate?: LocalDate | null;
+  /** Youth employment details (1.1.10, optional) — schooling, official school vacations, night permits, apprentice. */
+  youth?: YouthProfile | null;
 }
 
 /** 1.1.9 — monthly payroll components entered by the user (money only; never attendance). */
@@ -230,6 +233,30 @@ function validateBirthDate(d: LocalDate | null) {
   if (d < '1900-01-01') throw new RepoError('תאריך לידה לא סביר');
 }
 
+/** Validates and normalises the youth details (1.1.10). Empty details are stored as null. */
+export function normalizeYouthProfile(y: YouthProfile | null | undefined): YouthProfile | null {
+  if (!y) return null;
+  if (!['compulsory', 'not_compulsory', 'unknown'].includes(y.schooling)) throw new RepoError('סטטוס חובת לימוד לא תקין');
+  const vacations = (y.schoolVacations ?? []).filter((v) => v.from || v.to);
+  for (const v of vacations) {
+    if (!isValidDate(v.from) || !isValidDate(v.to)) throw new RepoError('תאריך חופשת לימודים לא תקין');
+    if (v.to < v.from) throw new RepoError('חופשת לימודים: תאריך הסיום לפני תאריך ההתחלה');
+  }
+  const permits = (y.nightPermits ?? []).filter((p) => p.reference || p.validFrom || p.validTo || p.until);
+  for (const p of permits) {
+    if (!isValidDate(p.validFrom) || !isValidDate(p.validTo) || p.validTo < p.validFrom) throw new RepoError('היתר לילה: תוקף לא תקין');
+    if (!/^\d{1,2}:\d{2}$/.test(p.until.trim())) throw new RepoError('היתר לילה: שעת סיום לא תקינה (HH:MM)');
+  }
+  const apprentice = y.apprentice?.reference?.trim() ? { reference: y.apprentice.reference.trim() } : null;
+  const out: YouthProfile = {
+    schooling: y.schooling,
+    schoolVacations: vacations.map((v) => ({ from: v.from, to: v.to })).sort((a, b) => a.from.localeCompare(b.from)),
+    nightPermits: permits.map((p) => ({ reference: p.reference.trim(), validFrom: p.validFrom, validTo: p.validTo, until: p.until.trim() })),
+    apprentice,
+  };
+  return out.schooling === 'unknown' && !out.schoolVacations.length && !out.nightPermits.length && !out.apprentice ? null : out;
+}
+
 /** Same validation as applyAttendanceImport for one imported shift. */
 function validateImportedShift(s: ShiftInput) {
   if (!s.startAt && !s.endAt) throw new RepoError('משמרת ריקה אינה נשמרת');
@@ -301,6 +328,7 @@ function toEmployee(r: Row): Employee {
     updatedAt: r.updated_at as string,
     archivedAt: (r.archived_at as string) ?? null,
     birthDate: (r.birth_date as string) ?? null,
+    youth: r.youth_json ? (JSON.parse(r.youth_json as string) as YouthProfile) : null,
   };
 }
 
@@ -458,7 +486,7 @@ export class Repository {
 
   async createEmployee(
     businessId: string,
-    input: { fullName: string; employeeNumber?: string | null; notes?: string | null; birthDate?: LocalDate | null; settings: EmployeeSettings },
+    input: { fullName: string; employeeNumber?: string | null; notes?: string | null; birthDate?: LocalDate | null; youth?: YouthProfile | null; settings: EmployeeSettings },
   ): Promise<Employee> {
     await this.getBusiness(businessId);
     const fullName = input.fullName.trim();
@@ -470,12 +498,12 @@ export class Repository {
     input = { ...input, settings: employeeSettingsOnly(input.settings) };
     const t = now();
     validateBirthDate(input.birthDate ?? null);
-    const emp: Employee = { id: uuid(), businessId, fullName, employeeNumber: num, notes: input.notes?.trim() || null, createdAt: t, updatedAt: t, archivedAt: null, birthDate: input.birthDate || null };
+    const emp: Employee = { id: uuid(), businessId, fullName, employeeNumber: num, notes: input.notes?.trim() || null, createdAt: t, updatedAt: t, archivedAt: null, birthDate: input.birthDate || null, youth: normalizeYouthProfile(input.youth) };
     const versionId = uuid();
     await this.driver.batch([
       {
-        sql: `INSERT INTO employees (id, business_id, full_name, employee_number, notes, birth_date, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-        params: [emp.id, businessId, emp.fullName, emp.employeeNumber, emp.notes, emp.birthDate ?? null, t, t],
+        sql: `INSERT INTO employees (id, business_id, full_name, employee_number, notes, birth_date, youth_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        params: [emp.id, businessId, emp.fullName, emp.employeeNumber, emp.notes, emp.birthDate ?? null, emp.youth ? JSON.stringify(emp.youth) : null, t, t],
       },
       {
         sql: `INSERT INTO employee_settings (id, employee_id, effective_from, settings_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)`,
@@ -494,7 +522,7 @@ export class Repository {
     if (rows.some((r) => r.id !== exceptId)) throw new RepoError('מספר עובד זה כבר קיים בעסק');
   }
 
-  async updateEmployee(businessId: string, id: string, patch: { fullName?: string; employeeNumber?: string | null; notes?: string | null; birthDate?: LocalDate | null }): Promise<Employee> {
+  async updateEmployee(businessId: string, id: string, patch: { fullName?: string; employeeNumber?: string | null; notes?: string | null; birthDate?: LocalDate | null; youth?: YouthProfile | null }): Promise<Employee> {
     const before = await this.getEmployee(businessId, id);
     const after: Employee = {
       ...before,
@@ -502,6 +530,7 @@ export class Repository {
       employeeNumber: patch.employeeNumber !== undefined ? patch.employeeNumber?.trim() || null : before.employeeNumber,
       notes: patch.notes !== undefined ? patch.notes?.trim() || null : before.notes,
       birthDate: patch.birthDate !== undefined ? patch.birthDate || null : (before.birthDate ?? null),
+      youth: patch.youth !== undefined ? normalizeYouthProfile(patch.youth) : (before.youth ?? null),
       updatedAt: now(),
     };
     if (!after.fullName) throw new RepoError('יש להזין שם עובד');
@@ -509,8 +538,8 @@ export class Repository {
     if (after.employeeNumber) await this.assertUniqueNumber(businessId, after.employeeNumber, id);
     await this.driver.batch([
       {
-        sql: `UPDATE employees SET full_name = ?, employee_number = ?, notes = ?, birth_date = ?, updated_at = ? WHERE id = ? AND business_id = ?`,
-        params: [after.fullName, after.employeeNumber, after.notes, after.birthDate ?? null, after.updatedAt, id, businessId],
+        sql: `UPDATE employees SET full_name = ?, employee_number = ?, notes = ?, birth_date = ?, youth_json = ?, updated_at = ? WHERE id = ? AND business_id = ?`,
+        params: [after.fullName, after.employeeNumber, after.notes, after.birthDate ?? null, after.youth ? JSON.stringify(after.youth) : null, after.updatedAt, id, businessId],
       },
       audit('employee', 'update', { businessId, employeeId: id, entityId: id }, before, after),
     ]);

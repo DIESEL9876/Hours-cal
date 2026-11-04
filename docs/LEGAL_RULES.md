@@ -2,7 +2,7 @@
 
 **Document date:** 2026-10-08
 **Applies to engine version:** 1.1.0 (`src/engine/`)
-**Change log:** 1.1.0 (2026-10-08) — office policy: five-day daily threshold 8:24 (rule 3.3). 1.1.6 — Friday policy (4.7). 1.1.7 (2026-11-03) — actual vs. paid attendance, vacation, sickness, holidays, election days (section 10). 1.1.9 (2026-11-04) — paid-day value, youth employment, travel, recuperation, reserve duty, agreements catalog, payroll components (section 11).
+**Change log:** 1.1.0 (2026-10-08) — office policy: five-day daily threshold 8:24 (rule 3.3). 1.1.6 — Friday policy (4.7). 1.1.7 (2026-11-03) — actual vs. paid attendance, vacation, sickness, holidays, election days (section 10). 1.1.9 (2026-11-04) — paid-day value, youth employment, travel, recuperation, reserve duty, agreements catalog, payroll components (section 11). 1.1.10 (2026-11-04) — youth rules and agreement catalog corrected against the research pack (section 12; supersedes §11.3 and §11.7 for new calculations).
 **Status:** rules cross-checked against secondary sources only — see "Verification status" below.
 
 This file documents every rule the calculation engine applies, where it comes from, how confident we are,
@@ -270,7 +270,7 @@ professional check the texts and record it in the app (11.7.4).
 | 11.2.6 | Hourly/daily vacation and holiday days carry a review note: the statutory vacation pay of an hourly worker is based on the pay of the reference period (Annual Leave Law §10 — 3 months ÷ 90 × calendar days, per secondary sources), so the business method is an estimate that **never replaces a higher statutory entitlement**. (S for the statutory statement; O for the method.) |
 | 11.2.7 | Reserve duty days are never valued at an hourly rate: basis `statutory_formula` (11.6). |
 
-### 11.3 Youth employment (חוק עבודת הנוער) — `src/engine/youth.ts`
+### 11.3 Youth employment (חוק עבודת הנוער) — `src/engine/youth.ts` (rule set Y1 — superseded by §12 for new calculations; kept for months closed under 1.1.9)
 
 Age is computed per attendance date from the optional date of birth (birthday inclusive → 18 on the birthday).
 Without a date of birth adult rules apply provisionally and **no age is guessed**; the legacy "minor" legal
@@ -316,7 +316,7 @@ Snapshot stability: youth warnings are produced only when a date of birth exists
 | Components keep the kinds separate: wage during service, NII reimbursement to the employer (not a gross addition), additional amount payable to the employee, manual. | O |
 | A reserve day is counted as a paid-absence day (1.1.7 rules); its value basis is `statutory_formula` with a review note. | O |
 
-### 11.7 Collective agreements and extension orders — `src/agreements/`
+### 11.7 Collective agreements and extension orders — `src/agreements/` (superseded by §12.3)
 
 | # | Rule |
 |---|---|
@@ -333,3 +333,44 @@ categories advance / bonus / recuperation / reserve / other; amounts in integer 
 (gross addition / advance / employer reimbursement / informational); details JSON (advance proposed recovery,
 authorised deduction + authorisation basis; reserve kind); soft delete; every change audited; a caller-supplied id
 makes saving idempotent (no duplicate posting); finalised months are read-only. Money never changes hours.
+
+## 12. Corrections of 1.1.10 (research pack of 2026-11-04)
+
+The full audit — what was correct, what changed, what cannot be automated, and the source and effective date of each
+activated rule — is in [`LEGAL_AUDIT_1.1.10.md`](LEGAL_AUDIT_1.1.10.md). The registry is in `src/engine/legalRules.ts`.
+
+### 12.1 Source status
+
+- **Evidence:** the figures come from the user's research pack:
+  - Kol Zchut rights summaries (approved by the user, but not the statute);
+  - a Knesset press release (Amendment 22, 2024);
+  - government PDFs and directory entries located by the pack.
+- **Network:** none of these could be opened from the build environment (proxy 403 for `main.knesset.gov.il`, `www.gov.il`, `www.kolzchut.org.il`, `teen.kolzchut.org.il`, `www.btl.gov.il`).
+- **Official text:** no rule is marked as verified against the official legal text.
+
+### 12.2 Youth rule set Y2
+
+| Rule | Y2 behaviour | Status |
+|---|---|---|
+| Y-001…Y-005 | 40 h/week; under 16 8 h; 16–17 five-day 9 h, otherwise 8 h; 7 h on the eve of the weekly rest and of a holiday **the minor does not work** | flag; commencement not verified |
+| Y-006 | Work on the configured rest day prohibited — no permit waives it; 36-hour rest checked | flag |
+| Y-007 | Net ≥ 6 h → 45 min with a 30-min continuous segment (eve: 30); only confirmed unpaid breaks and same-day gaps count; unconfirmed/paid → review | flag |
+| Y-008 | Daily excess, then weekly excess beyond it (no double counting); pay never reduced; `YOUTH_PAY_REVIEW` | flag |
+| Y-009…Y-012 | 26.07 / 27.94 / 30.92 ₪; apprentice 22.35 ₪ only with a document — from **2026-04-01**, not retroactive; review outside the table | wage check |
+| Y-013 | Ages 16–17 on a recorded official school vacation: until 01:00 → conditions review (transport after 23:00); never automatic permission | exception |
+| Y-014 | Night 20:00–08:00 (under 16 or compulsory schooling) / 22:00–06:00 (not compulsory); unknown schooling 20:00–22:00 → review; recorded permits within validity and hour → review | flag |
+| Y-015 | Age 14 only on a recorded school vacation (review); under 14 prohibited | flag |
+| Y-016, Y-017 | Schooling and youth vacation pay are not inferred or calculated → review | review |
+
+### 12.3 Instruments
+
+The catalog (`2026.11.04`):
+- holds COLL-001…COLL-018 with evidence class, publication year, scope, employee-class coverage and amendment relations;
+- keeps extension orders, collective agreements (none catalogued) and wage notices as separate families.
+
+A clause executes only with all three of:
+- a complete applicability confirmation (employee class not excluded, full text read, amendments and exclusions checked);
+- a per-clause verification (clause reference, effective date, verifier);
+- the instrument being in force.
+
+Conflicting verified instruments are never cherry-picked. **No clause is activated in 1.1.10.**

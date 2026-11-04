@@ -139,12 +139,35 @@ export interface AgreementSelection {
     occupation: string;
     employmentStart: string | null;
     note?: string;
+    /** 1.1.10 scope checks — all required for a complete confirmation. */
+    employeeClass?: EmployeeClass;
+    /** Employer, enterprise or employer association through which the instrument applies. */
+    employerUnit?: string;
+    workSite?: string;
+    fullTextReviewed?: boolean;
+    amendmentsChecked?: boolean;
+    exclusionsChecked?: boolean;
   } | null;
   /**
-   * A payroll professional verified THIS profile version against the official text (name, date, version).
-   * Required before a secondary-source profile may change calculations.
+   * 1.1.9: a professional verified a whole profile version. Since 1.1.10 this is NOT sufficient for execution
+   * (kept for history): every executable clause needs its own verification below.
    */
   professionalVerification?: { by: string; at: string; version: string } | null;
+  /** 1.1.10: per-clause verification against the full official text (clause reference and effective date). */
+  clauseVerifications?: ClauseVerification[];
+}
+
+export type EmployeeClass = 'site_worker' | 'office_staff' | 'contractor_worker' | 'client_employee' | 'other';
+export type AgreementClause = 'hours' | 'recuperation' | 'travel';
+export interface ClauseVerification {
+  profileVersion: string;
+  clause: AgreementClause;
+  /** Paragraph / clause reference in the official text. */
+  clauseRef: string;
+  /** Date from which the clause applies, per the official text. */
+  effectiveFrom: LocalDate;
+  by: string;
+  at: string;
 }
 
 /** Thresholds taken from a VERIFIED agreement rule profile (applied by the engine like a contractual profile). */
@@ -372,6 +395,37 @@ export interface Warning {
   shiftId?: string;
   /** Review flag acknowledged by a human (shift marked as reviewed). Not counted as open. */
   acknowledged?: boolean;
+  /** Legal rule id (legalRules.ts) that produced the warning, when one exists. */
+  ruleId?: string;
+}
+
+/** Youth employment details entered for a minor (1.1.10). Nothing here is inferred from the date of birth. */
+export type SchoolingStatus = 'compulsory' | 'not_compulsory' | 'unknown';
+export interface YouthProfile {
+  /** Whether the compulsory-education law applies to the minor. */
+  schooling: SchoolingStatus;
+  /** Official school vacation periods (entered by the user from the Ministry of Education calendar). */
+  schoolVacations: { from: LocalDate; to: LocalDate }[];
+  /** Night-work permits actually held: reference, validity and the latest permitted time (HH:MM). */
+  nightPermits: { reference: string; validFrom: LocalDate; validTo: LocalDate; until: string }[];
+  /** Recognised apprentice (Apprenticeship Law) — only with a document reference. */
+  apprentice: { reference: string } | null;
+}
+export type YouthRuleSet = 'Y1' | 'Y2';
+
+/** Youth figures of a period (rule set Y2) — kept apart from hours and pay; nothing is deducted. */
+export interface YouthSummary {
+  ruleSet: YouthRuleSet;
+  youthDays: number;
+  /** Net minutes recorded on youth dates (all of them payable). */
+  recordedMinutes: number;
+  /** Daily excess, then weekly excess beyond it (no double counting). */
+  dailyExcessMinutes: number;
+  weeklyExcessMinutes: number;
+  prohibitedOvertimeMinutes: number;
+  nightProhibitedMinutes: number;
+  nightReviewMinutes: number;
+  restDayMinutes: number;
 }
 
 export type Tier = 'regular' | 'ot125' | 'ot150';
@@ -516,6 +570,10 @@ export interface EmployeePeriodInput {
   historyFrom?: LocalDate;
   /** Date of birth (1.1.9). Present → age-dependent (youth) rules are checked per attendance date. */
   birthDate?: LocalDate | null;
+  /** Youth employment details (1.1.10). */
+  youth?: YouthProfile | null;
+  /** Youth rule set: 'Y2' (default) or 'Y1' for months finalised under 1.1.9. */
+  youthRuleSet?: YouthRuleSet;
   /** Per-month manual value of a paid absence day (minutes), with the reason (1.1.9). */
   paidDayOverrides?: { ym: string; minutes: number; reason: string }[];
   /** Hours thresholds from verified agreement profiles (1.1.9). */
@@ -554,4 +612,6 @@ export interface EmployeePeriodResult {
   paidDay?: PaidDayInfo;
   /** Age-dependent classification (1.1.9): youth days found, or unverified when no birth date is stored. */
   age?: { birthDate: LocalDate | null; youthDays: number; turns18: LocalDate | null };
+  /** Youth summary (rule set Y2, minors only). */
+  youth?: YouthSummary;
 }

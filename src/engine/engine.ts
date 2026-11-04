@@ -35,7 +35,7 @@ import { CalendarContext, type Interval } from './calendar';
 import { calculateDeductibleBreakMinutes, calculateNetWorkedMinutes } from './breaks';
 import { fridayPolicyOn, LAW, OFFICE_POLICY, resolveAbsenceSettings, resolveSettings } from './settings';
 import { absenceHistoryFrom, computeDayAttendance, emptyDayAttendance, sumAttendance, type AbsenceContext, type DayAverage } from './absence';
-import { checkYouthDay, checkYouthWeek, youthStatusOn } from './youth';
+import { birthdayOn, checkYouthDayV1, checkYouthDayV2, checkYouthWeekV1, checkYouthWeekV2, inSchoolVacation, PROHIBITED_WORK_TEXT, youthStatusOn, type YouthDayOutcome } from './youth';
 import {
   addDays,
   eachDate,
@@ -461,6 +461,7 @@ export function calculateEmployeePeriod(input: EmployeePeriodInput, opts: { skip
   if (input.birthDate && minorProfileSet)
     input = { ...input, settingsVersions: input.settingsVersions.map((v) => (v.settings.legalProfile === 'minor' ? { ...v, settings: { ...v.settings, legalProfile: 'general_private' } } : v)) };
   const youthOn = (date: LocalDate) => youthStatusOn(input.birthDate, date)?.minor === true;
+  const youthRuleSet = input.youthRuleSet ?? 'Y2';
   const { from, to } = input;
   if (from > to) throw new Error('from > to');
   const calcFrom = weekStartOf(from);
@@ -766,14 +767,15 @@ export function calculateEmployeePeriod(input: EmployeePeriodInput, opts: { skip
     const weekOt = week.dailyOvertimeMinutes + week.weeklyOvertimeMinutes;
     // Minors: the adult overtime-permit limits do not apply — the youth limits below do (overtime is prohibited).
     const youthDates = eachDate(ws, we).filter((d) => youthOn(d) && (dayWork.get(d)?.result.netMinutes ?? 0) > 0);
-    if (youthDates.length) week.warnings.push(...checkYouthWeek(youthDates[youthDates.length - 1], youthDates.reduce((a, d) => a + dayWork.get(d)!.result.netMinutes, 0)));
+    // Rule set Y1 (1.1.9) checks the week here; Y2 after the daily youth pass (daily excess first, then weekly).
+    if (youthDates.length && youthRuleSet === 'Y1') week.warnings.push(...checkYouthWeekV1(youthDates[youthDates.length - 1], youthDates.reduce((a, d) => a + dayWork.get(d)!.result.netMinutes, 0)));
     if (youthDates.length) {
       // adult weekly limits skipped for weeks with youth work
     } else if (weekOt > LAW.MAX_WEEKLY_OVERTIME_MINUTES)
       warn(week.warnings, 'WEEKLY_OT_LIMIT', 'compliance', `בשבוע זה ${formatHM(weekOt)} שעות נוספות – מעל המכסה הכללית של 16 שעות שבועיות`, we);
     if (week.netMinutes > LAW.MAX_WEEKLY_TOTAL_MINUTES && !youthDates.length)
       warn(week.warnings, 'WEEKLY_TOTAL_LIMIT', 'compliance', `סך שעות העבודה בשבוע (${formatHM(week.netMinutes)}) עולה על 58 שעות`, we);
-    checkWeeklyRest(ws, we, dayWork, timed, cal, week.warnings);
+    checkWeeklyRest(ws, we, dayWork, timed, cal, week.warnings, youthRuleSet === 'Y2' ? youthOn : undefined);
     weeks.push(week);
   }
 
@@ -799,7 +801,9 @@ export function calculateEmployeePeriod(input: EmployeePeriodInput, opts: { skip
     }
   }
 
-  // Youth Employment Law checks per attendance date (1.1.9). Warnings only — worked minutes are never changed.
+  // Youth Employment Law checks per attendance date. Warnings only — worked minutes and pay are never changed.
+  const youthOutcomes = new Map<LocalDate, YouthDayOutcome>();
+  const youthWeekly = new Map<LocalDate, number>();
   if (input.birthDate) {
     for (const dw of dayWork.values()) {
       const y = youthStatusOn(input.birthDate, dw.date);
@@ -810,19 +814,87 @@ export function calculateEmployeePeriod(input: EmployeePeriodInput, opts: { skip
         continue;
       }
       const s = dw.version.settings;
-      dw.result.warnings.push(
-        ...checkYouthDay({
+      if (youthRuleSet === 'Y1') {
+        dw.result.warnings.push(
+          ...checkYouthDayV1({
+            date: dw.date,
+            age: y.age,
+            netMinutes: dw.result.netMinutes,
+            grossMinutes: dw.result.grossMinutes,
+            breakMinutes: dw.result.breakMinutes + dw.result.paidBreakMinutes,
+            minutes: dw.minutes.map((m) => ({ minuteOfDay: utcToLocal(m.ms).minuteOfDay, premium: m.premium })),
+            eve: dw.result.restEve || dw.result.holidayEve,
+            fiveDayWeek: s.workweek === 'five',
+            hourlyRateAgorot: s.hourlyRateAgorot,
+          }),
+        );
+        continue;
+      }
+      // Rule set Y2.
+      if (dw.status?.status === 'vacation' && dw.date >= from && dw.date <= to)
+        dw.result.warnings.push({
+          code: 'YOUTH_VACATION_REVIEW',
+          severity: 'review',
+          message: 'יום חופשה של נער: זכאות החופשה לנוער שונה (18 ימים קלנדריים, חישוב יחסי, 4% לשעתי/יומי שהועסק פחות מ-75 ימים רצופים) ודמי החופשה לפי השכר בתקופה הקובעת — אינם מחושבים במערכת. יש לבדוק',
           date: dw.date,
-          age: y.age,
-          netMinutes: dw.result.netMinutes,
-          grossMinutes: dw.result.grossMinutes,
-          breakMinutes: dw.result.breakMinutes + dw.result.paidBreakMinutes,
-          minutes: dw.minutes.map((m) => ({ minuteOfDay: utcToLocal(m.ms).minuteOfDay, premium: m.premium })),
-          eve: dw.result.restEve || dw.result.holidayEve,
-          fiveDayWeek: s.workweek === 'five',
-          hourlyRateAgorot: s.hourlyRateAgorot,
-        }),
-      );
+          ruleId: 'Y-017',
+        });
+      const valid = dw.shifts.filter((p) => p.result.valid && p.startMs !== null && p.endMs !== null).sort((a, b) => a.startMs! - b.startMs!);
+      const breaks: Parameters<typeof checkYouthDayV2>[0]['breaks'] = [];
+      for (const p of valid) {
+        const b = p.result.break;
+        if (b.deductedMinutes > 0) breaks.push({ minutes: b.deductedMinutes, kind: b.unconfirmed ? 'unpaid_unconfirmed' : 'unpaid_confirmed' });
+        if (b.paidMinutes > 0) breaks.push({ minutes: b.paidMinutes, kind: 'paid' });
+      }
+      for (let i = 1; i < valid.length; i++) {
+        const gap = (valid[i].startMs! - valid[i - 1].endMs!) / MINUTE_MS;
+        if (gap > 0) breaks.push({ minutes: gap, kind: 'gap' });
+      }
+      const outcome = checkYouthDayV2({
+        date: dw.date,
+        age: y.age,
+        netMinutes: dw.result.netMinutes,
+        breaks,
+        minutes: dw.minutes.map((m) => ({ minuteOfDay: utcToLocal(m.ms).minuteOfDay, premium: m.premium })),
+        restEve: dw.result.restEve,
+        holidayEve: dw.result.holidayEve,
+        worksNextDay: (dayWork.get(addDays(dw.date, 1))?.result.netMinutes ?? 0) > 0,
+        fiveDayWeek: s.workweek === 'five',
+        hourlyRateAgorot: s.hourlyRateAgorot,
+        profile: input.youth ?? null,
+      });
+      youthOutcomes.set(dw.date, outcome);
+      dw.result.warnings.push(...outcome.warnings);
+    }
+    if (youthRuleSet === 'Y2') {
+      // 40-hour week: the daily excess first, then the weekly excess beyond it (no double counting).
+      for (const week of weeks) {
+        const dates = eachDate(week.weekStart, week.weekEnd).filter((d) => youthOn(d) && (dayWork.get(d)?.result.netMinutes ?? 0) > 0);
+        if (!dates.length) continue;
+        const net = dates.reduce((a, d) => a + dayWork.get(d)!.result.netMinutes, 0);
+        const dailyExcess = dates.reduce((a, d) => a + (youthOutcomes.get(d)?.dailyExcessMinutes ?? 0), 0);
+        const wk = checkYouthWeekV2(dates[dates.length - 1], net, dailyExcess);
+        week.warnings.push(...wk.warnings);
+        youthWeekly.set(dates[dates.length - 1], wk.weeklyExcessMinutes);
+      }
+      const inRange = [...youthOutcomes.entries()].filter(([d]) => d >= from && d <= to);
+      if (inRange.some(([, o]) => o.noWageTable))
+        periodWarnings.push({
+          code: 'YOUTH_MIN_WAGE_TABLE',
+          severity: 'review',
+          message: 'אין במערכת טבלת שכר מינימום לנוער לחלק מהתקופה (השיעורים המפורסמים חלים מ-1.4.2026 ואינם רטרואקטיביים) — יש לבדוק את השכר ידנית',
+          date: from,
+          ruleId: 'Y-009',
+        });
+      const schooling = input.youth?.schooling ?? 'unknown';
+      if (schooling !== 'not_compulsory' && inRange.some(([d]) => (dayWork.get(d)?.result.netMinutes ?? 0) > 0 && !inSchoolVacation(input.youth, d)))
+        periodWarnings.push({
+          code: 'YOUTH_SCHOOL_REVIEW',
+          severity: 'review',
+          message: `חובת לימוד: ${schooling === 'compulsory' ? 'חלה' : 'לא הוזנה'}. יש לוודא שעבודת הנער בימי לימודים אינה בשעות הלימודים ואינה פוגעת בחובת הלימוד — לא ניתן להסיק זאת מהגיל`,
+          date: from,
+          ruleId: 'Y-016',
+        });
     }
   }
 
@@ -880,10 +952,26 @@ export function calculateEmployeePeriod(input: EmployeePeriodInput, opts: { skip
   const youthDays = days.filter((d) => d.worked && youthOn(d.date)).length;
   let turns18: LocalDate | null = null;
   if (input.birthDate) {
-    const b18 = `${+input.birthDate.slice(0, 4) + 18}${input.birthDate.slice(4)}`;
+    const b18 = birthdayOn(input.birthDate, 18);
     if (b18 >= from && b18 <= to) turns18 = b18;
   }
   result.age = { birthDate: input.birthDate ?? null, youthDays, turns18 };
+  if (youthRuleSet === 'Y2' && input.birthDate && eachDate(from, to).some((d) => youthOn(d))) {
+    const inRange = [...youthOutcomes.entries()].filter(([d]) => d >= from && d <= to);
+    const dailyExcess = inRange.reduce((a, [, o]) => a + o.dailyExcessMinutes, 0);
+    const weeklyExcess = [...youthWeekly.entries()].filter(([d]) => d >= from && d <= to).reduce((a, [, m]) => a + m, 0);
+    result.youth = {
+      ruleSet: 'Y2',
+      youthDays,
+      recordedMinutes: days.filter((d) => youthOn(d.date)).reduce((a, d) => a + d.netMinutes, 0),
+      dailyExcessMinutes: dailyExcess,
+      weeklyExcessMinutes: weeklyExcess,
+      prohibitedOvertimeMinutes: dailyExcess + weeklyExcess,
+      nightProhibitedMinutes: inRange.reduce((a, [, o]) => a + o.nightProhibitedMinutes, 0),
+      nightReviewMinutes: inRange.reduce((a, [, o]) => a + o.nightReviewMinutes, 0),
+      restDayMinutes: inRange.reduce((a, [, o]) => a + o.restDayMinutes, 0),
+    };
+  }
   return result;
 }
 
@@ -894,6 +982,7 @@ function checkWeeklyRest(
   timed: ProcessedShift[],
   cal: CalendarContext,
   out: Warning[],
+  youthOn?: (date: LocalDate) => boolean,
 ) {
   for (const date of eachDate(ws, we)) {
     const v = dayWork.get(date)?.version;
@@ -906,8 +995,17 @@ function checkWeeklyRest(
     const after = valid.filter((p) => p.startMs! >= win.endMs).map((p) => p.startMs!);
     if (!before.length || !after.length) continue;
     const gap = (Math.min(...after) - Math.max(...before)) / MINUTE_MS;
-    if (gap < LAW.WEEKLY_REST_MINUTES)
-      warn(out, 'WEEKLY_REST_SHORT', 'compliance', `המנוחה השבועית הרצופה הייתה ${formatHM(gap)} שעות – פחות מ-36 שעות`, date);
+    if (gap < LAW.WEEKLY_REST_MINUTES) {
+      if (youthOn?.(date))
+        out.push({
+          code: 'YOUTH_WEEKLY_REST_SHORT',
+          severity: 'compliance',
+          message: `המנוחה השבועית הרצופה של הנער הייתה ${formatHM(gap)} שעות – פחות מ-36 שעות (כולל יום המנוחה). אין היתר המתיר זאת. ${PROHIBITED_WORK_TEXT}`,
+          date,
+          ruleId: 'Y-006',
+        });
+      else warn(out, 'WEEKLY_REST_SHORT', 'compliance', `המנוחה השבועית הרצופה הייתה ${formatHM(gap)} שעות – פחות מ-36 שעות`, date);
+    }
   }
 }
 

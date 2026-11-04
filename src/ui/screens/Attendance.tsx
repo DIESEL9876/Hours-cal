@@ -25,6 +25,8 @@ import {
   type ShiftResult,
   type Warning,
   type WeekResult,
+  PROHIBITED_WORK_TEXT,
+  type YouthSummary,
 } from '../../engine';
 import { toDayStatuses, type Business, type DayEntry, type Employee, type ShiftRecord } from '../../data/repo';
 import { Crumbs, useApp } from '../App';
@@ -422,9 +424,9 @@ export function AttendanceScreen({ businessId, employeeId }: { businessId: strin
                     entry={entry}
                     onDayType={(status, absence) => changeDayType(day.date, status, absence)}
                     onRejectSuggestion={(kind) => saveDay(day.date, { date: day.date, status: null, note: entry?.note ?? null, absence: { ...(entry?.absence ?? {}), rejectedSuggestion: kind } })}
-                    onSave={async (after) => {
-                      const ok = await saveShift(sh, after);
-                      if (ok && !sh && after && i >= dayShifts.length) setExtraRows((x) => ({ ...x, [day.date]: Math.max(0, (x[day.date] ?? 0) - 1) }));
+                    onSave={async (after, before) => {
+                      const ok = await saveShift(before, after);
+                      if (ok && !before && after && i >= dayShifts.length) setExtraRows((x) => ({ ...x, [day.date]: Math.max(0, (x[day.date] ?? 0) - 1) }));
                       return ok;
                     }}
                     onAddShift={() => setExtraRows((x) => ({ ...x, [day.date]: (x[day.date] ?? 0) + 1 }))}
@@ -457,6 +459,7 @@ export function AttendanceScreen({ businessId, employeeId }: { businessId: strin
         ]}
         attendance={att}
         financials={financials}
+        youth={result.youth ?? null}
         ageNote={
           employee.birthDate
             ? result.age?.youthDays
@@ -593,7 +596,8 @@ function ShiftRow({
   entry: DayEntry | null;
   onDayType: (status: DayStatusKind | null, absence?: AbsenceDetails | null) => void;
   onRejectSuggestion: (kind: DayStatusKind) => void;
-  onSave: (after: ShiftInput | null) => Promise<boolean>;
+  /** `before` is the row's current shift (may be newer than the `shift` prop while a save is in flight). */
+  onSave: (after: ShiftInput | null, before: ShiftInput | null) => Promise<boolean>;
   onAddShift: () => void;
   onDetails: () => void;
 }) {
@@ -606,6 +610,19 @@ function ShiftRow({
   const [brk, setBrk] = useState(breakVal);
   const [bad, setBad] = useState<{ start?: boolean; end?: boolean; brk?: boolean }>({});
   const focused = useRef<string | null>(null);
+  // Commits of one row run one after another, each on the row's latest shift (the parent's props may still lag behind
+  // a save that has not finished — typing the exit quickly after the entry must update that shift, not create another).
+  const queue = useRef<Promise<unknown>>(Promise.resolve());
+  const latest = useRef<ShiftInput | null>(shift);
+  useEffect(() => {
+    latest.current = shift;
+  }, [shift]);
+  const save = async (after: ShiftInput | null) => {
+    const ok = await onSave(after, latest.current);
+    if (ok) latest.current = after;
+    return ok;
+  };
+  const enqueue = (f: () => Promise<unknown>) => (queue.current = queue.current.then(f, f));
 
   useEffect(() => {
     if (focused.current !== 'start') setStart(startVal);
@@ -613,7 +630,11 @@ function ShiftRow({
     if (focused.current !== 'brk') setBrk(breakVal);
   }, [startVal, endVal, breakVal]);
 
-  const commitTimes = async (s: string, e: string) => {
+  const commitTimes = (s: string, e: string) => enqueue(() => commitTimesNow(s, e));
+  const commitTimesNow = async (s: string, e: string) => {
+    const shift = latest.current;
+    const startVal = shift?.startAt?.slice(11) ?? '';
+    const endVal = shift?.endAt?.slice(11) ?? '';
     const ns = normalizeTimeInput(s);
     const ne = normalizeTimeInput(e);
     if (ns === null || ne === null) {
@@ -625,7 +646,7 @@ function ShiftRow({
     if (ns === startVal && ne === endVal) return setBad({});
     if (!ns && !ne) {
       setBad({});
-      if (shift) await onSave(null);
+      if (shift) await save(null);
       return;
     }
     const ts = buildTimestamps(day.date, ns, ne);
@@ -644,11 +665,13 @@ function ShiftRow({
       breakPaid: false,
       reviewed: false,
     };
-    const ok = await onSave({ ...base, startAt: ts.startAt, endAt: ts.endAt, breakStart: base.breakStart && ts.startAt ? base.breakStart : null });
+    const ok = await save({ ...base, startAt: ts.startAt, endAt: ts.endAt, breakStart: base.breakStart && ts.startAt ? base.breakStart : null });
     setBad(ok ? {} : { end: true });
   };
 
-  const commitBreak = async (raw: string) => {
+  const commitBreak = (raw: string) => enqueue(() => commitBreakNow(raw));
+  const commitBreakNow = async (raw: string) => {
+    const shift = latest.current;
     if (!shift) {
       setBrk('');
       return;
@@ -657,7 +680,7 @@ function ShiftRow({
     if (v === 'invalid') return setBad({ brk: true });
     setBad({});
     if (v === shift.breakMinutes) return;
-    await onSave({ ...shift, breakMinutes: v, breakConfirmed: v !== null ? true : shift.breakConfirmed });
+    await save({ ...shift, breakMinutes: v, breakConfirmed: v !== null ? true : shift.breakConfirmed });
   };
 
   const first = index === 0;
@@ -747,7 +770,7 @@ function ShiftRow({
             <button
               className="no-print rounded p-0.5 text-amber-600 hover:bg-amber-100"
               title="אישור שההפסקה ניתנה בפועל"
-              onClick={() => onSave({ ...shift, breakConfirmed: true })}
+              onClick={() => enqueue(() => (latest.current ? save({ ...latest.current, breakConfirmed: true }) : Promise.resolve(false)))}
               data-testid="confirm-break"
             >
               <IconCheck size={15} />
@@ -924,12 +947,14 @@ function TotalsBar({
   flags,
   attendance,
   financials,
+  youth,
   ageNote,
 }: {
   items: { label: string; value: string; strong?: boolean; testid?: string; decimalMinutes?: number; legend?: boolean }[];
   flags: { label: string; count: number; tone: 'amber' | 'red' | 'violet'; onClick: () => void }[];
   attendance: AttendanceTotals;
   financials: MonthFinancials | null;
+  youth: YouthSummary | null;
   ageNote: string | null;
 }) {
   const visible = flags.filter((f) => f.count > 0);
@@ -1009,6 +1034,39 @@ function TotalsBar({
         {a.weeklyCreditMinutes > 0 && hourItem('זיכוי לתקן השבועי', a.weeklyCreditMinutes, 'total-weekly-credit')}
         {ageNote && <div className="ms-auto self-center text-[11px] text-ink-soft" data-testid="age-note">{ageNote}</div>}
       </div>
+      {youth && (
+        <div className="mx-auto flex max-w-[1600px] flex-wrap items-center gap-x-5 gap-y-1 border-t border-line/60 px-6 py-2 text-[12px]" data-testid="youth-summary">
+          <span className="border-e border-line pe-4 text-[11px] font-medium text-ink-soft">חוק עבודת הנוער</span>
+          <span>
+            שעות שנרשמו: <b className="num">{hm(youth.recordedMinutes, '0:00')}</b> (כולן נשמרות ומשולמות)
+          </span>
+          <span className={youth.prohibitedOvertimeMinutes ? 'text-violet-800' : ''}>
+            מעבר למותר: <b className="num" data-testid="youth-prohibited">{hm(youth.prohibitedOvertimeMinutes, '0:00')}</b>
+          </span>
+          <span className="text-ink-soft">
+            מתוכן עודף יומי: <b className="num">{hm(youth.dailyExcessMinutes, '0:00')}</b>
+          </span>
+          <span className="text-ink-soft">
+            עודף שבועי מעבר ליומי: <b className="num">{hm(youth.weeklyExcessMinutes, '0:00')}</b>
+          </span>
+          {youth.nightProhibitedMinutes > 0 && (
+            <span className="text-violet-800">
+              לילה אסור: <b className="num">{hm(youth.nightProhibitedMinutes)}</b>
+            </span>
+          )}
+          {youth.nightReviewMinutes > 0 && (
+            <span className="text-amber-800">
+              לילה לבדיקה: <b className="num">{hm(youth.nightReviewMinutes)}</b>
+            </span>
+          )}
+          {youth.restDayMinutes > 0 && (
+            <span className="text-violet-800">
+              ביום המנוחה: <b className="num">{hm(youth.restDayMinutes)}</b>
+            </span>
+          )}
+          {(youth.prohibitedOvertimeMinutes > 0 || youth.nightProhibitedMinutes > 0 || youth.restDayMinutes > 0) && <span className="text-amber-800">{PROHIBITED_WORK_TEXT} — דורש בדיקת חשב/ת שכר</span>}
+        </div>
+      )}
       {financials && (financials.count > 0 || financials.travel.totalAgorot > 0 || financials.absenceEstimateAgorot > 0) && (
         <div className="mx-auto flex max-w-[1600px] flex-wrap items-start gap-x-6 gap-y-1 border-t border-line/60 px-6 py-2" data-testid="payroll-totals-bar">
           <div className="min-w-0 self-center border-e border-line pe-4 text-[11px] font-medium text-ink-soft" title="סכומים לצורך הכנת שכר בלבד — אינם שעות עבודה ואינם תלוש שכר">

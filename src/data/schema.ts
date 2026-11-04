@@ -142,6 +142,11 @@ export const MIGRATIONS: Migration[] = [
       `ALTER TABLE month_reviews ADD COLUMN rules_json TEXT`,
     ],
   },
+  {
+    version: 4,
+    description: '1.1.10 youth employment details (schooling, school vacations, night permits, apprentice) — additive',
+    statements: [`ALTER TABLE employees ADD COLUMN youth_json TEXT`],
+  },
 ];
 
 export const SCHEMA_VERSION = MIGRATIONS[MIGRATIONS.length - 1].version;
