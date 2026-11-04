@@ -942,6 +942,9 @@ const norm = (s: string) => s.toLowerCase().replace(/["'׳״.,\-()/]/g, ' ').rep
 export function searchCatalog(query: string, family: InstrumentFamily | 'all' = 'all', sector: Sector | 'all' = 'all'): CatalogEntry[] {
   const words = norm(query).split(' ').filter(Boolean);
   const pool = CATALOG.filter((e) => (family === 'all' || FAMILY_OF[e.type] === family) && (sector === 'all' || e.sector === sector));
+  // A research key (COLL-005) is matched exactly — URL fragments such as "dynamiccollector" must not match it.
+  const key = /^\s*coll-?(\d{3})\s*$/i.exec(query);
+  if (key) return pool.filter((e) => e.researchId === `COLL-${key[1]}`);
   if (!words.length) return [...pool];
   return pool.filter((e) => {
     const hay = norm(

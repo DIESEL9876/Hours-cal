@@ -129,8 +129,8 @@ professional transcribes a verified clause for an employee with a complete appli
 |---|---|
 | `tsc -b` | clean |
 | Unit (vitest) | **444 passed**, 2 skipped |
-| End-to-end (Playwright) | **17 passed**, including the new `e2e/agreements.spec.ts` and the 1.1.10 suites |
-| Rust tests, `check:release` | see the final run in the delivery message |
+| End-to-end (Playwright) | **17 passed**, including the new `e2e/agreements.spec.ts` and the 1.1.10 suites (one search-quality bug found and fixed: a research key such as COLL-005 now matches exactly) |
+| Rust tests, `check:release` | all passed · "Release-ready" · installer audit passed (public key embedded, no owner-only material) |
 
 New tests:
 

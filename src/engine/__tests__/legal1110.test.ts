@@ -259,6 +259,7 @@ describe('agreements: catalog and clause gate (tests 14–16)', () => {
     expect(searchCatalog('', 'wage_notice').map((e) => e.id).sort()).toEqual(['coll-016', 'coll-017']);
     expect(searchCatalog('2010').map((e) => e.id)).toContain('coll-009'); // by year
     expect(searchCatalog('COLL-012').map((e) => e.id)).toEqual(['coll-012']); // by key
+    expect(searchCatalog('COLL-005').map((e) => e.id)).toEqual(['eo-construction']); // exact, not URL fragments
     expect(catalogEntry('eo-construction')!.relations).toContainEqual({ kind: 'amended_by', id: 'coll-018' });
     for (const e of CATALOG) {
       expect(['extension_order', 'wage_notice']).toContain(FAMILY_OF[e.type]);
