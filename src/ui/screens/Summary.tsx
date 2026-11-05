@@ -1,10 +1,10 @@
 import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
 import { dedupeWarnings, formatDays, formatDecimalHours, premiumMinutes, type AttendanceTotals, type BusinessSummary, type BusinessSummaryRow, type PeriodTotals } from '../../engine';
-import type { Business, MonthReview } from '../../data/repo';
+import type { Business, MonthlyAdjustment, MonthReview } from '../../data/repo';
 import { closingRules, computeBusinessFinancials, computeBusinessMonth, sha256Hex, snapshotOf, yearMonthKey } from '../../data/service';
 import { shekelsText, type MonthFinancials } from '../../payroll/financials';
 import { Crumbs, useApp } from '../App';
-import { Badge, Button, Card, Checkbox, DECIMAL_HOURS_LABEL, DECIMAL_HOURS_TITLE, DecimalHours, PageHeader, severityLabel, severityTone, useUi } from '../components';
+import { Badge, Button, Card, Checkbox, DECIMAL_HOURS_LABEL, DECIMAL_HOURS_TITLE, DecimalHours, PageHeader, severityLabel, severityTone, WarningTip, useUi } from '../components';
 import { IconAlert, IconCheck, IconChevronLeft, IconDownload, IconLock, IconPrinter, IconSearch } from '../icons';
 import { MonthPicker } from '../MonthPicker';
 import { formatDateHe, formatTimestamp, hm, monthTitle, shekels } from '../format';
@@ -12,15 +12,14 @@ import { exportBusinessMonth } from '../../export/exporters';
 import { COPYRIGHT } from '../../licensing/CopyrightFooter';
 import { issuesText } from '../../export/tables';
 
-type SortKey = 'name' | 'days' | 'regular' | 'ot125' | 'ot150' | 'premium' | 'net' | 'aDays' | 'pDays' | 'aHours' | 'pHours' | 'vac' | 'sick' | 'hol' | 'elec';
+type SortKey = 'name' | 'regular' | 'ot125' | 'ot150' | 'premium' | 'net' | 'aDays' | 'pDays' | 'aHours' | 'pHours' | 'vac' | 'sick' | 'hol';
 
 const sortValue = (r: BusinessSummaryRow, k: SortKey): number | string => {
   const t = r.totals;
+  const a = r.result.attendance;
   switch (k) {
     case 'name':
       return r.name;
-    case 'days':
-      return t.daysWorked;
     case 'regular':
       return t.buckets.regular;
     case 'ot125':
@@ -32,66 +31,60 @@ const sortValue = (r: BusinessSummaryRow, k: SortKey): number | string => {
     case 'net':
       return t.netMinutes;
     case 'aDays':
-      return r.result.attendance.actualWorkedDays;
+      return a.actualWorkedDays;
     case 'pDays':
-      return r.result.attendance.paidDayHundredths;
+      return a.paidDayHundredths;
     case 'aHours':
-      return r.result.attendance.actualWorkedMinutes;
+      return a.actualWorkedMinutes;
     case 'pHours':
-      return r.result.attendance.payableEquivalentMinutes;
+      return a.payableEquivalentMinutes;
     case 'vac':
-      return r.result.attendance.vacationDayHundredths;
+      return a.vacationDayHundredths;
     case 'sick':
-      return r.result.attendance.sickDayHundredths;
+      return a.sickDayHundredths;
     case 'hol':
-      return r.result.attendance.holidayDayHundredths;
-    case 'elec':
-      return r.result.attendance.electionDayHundredths;
+      return a.holidayDayHundredths;
   }
 };
 
-/** Actual vs. paid attendance cells (version 1.1.7): hours HH:MM with decimal hours underneath, fractional days. */
-function AttendanceCells({ a, total = false }: { a: AttendanceTotals; total?: boolean }) {
-  const cls = 'num px-3 py-3 text-right';
-  const days = (v: number, testid: string, sub?: string) => (
-    <td className={cls} data-testid={total ? `grand-${testid}` : testid}>
-      {formatDays(v)}
-      {sub && <div className="num mt-0.5 text-[11px] font-normal leading-tight text-slate-500">{sub}</div>}
-    </td>
-  );
-  const hours = (v: number, testid: string) => (
-    <td className={cls} data-testid={total ? `grand-${testid}` : testid}>
-      {hm(v, '0:00')}
-      <DecimalHours minutes={v} testid={`dec-${testid}`} />
-    </td>
-  );
+const REVIEW_LABEL: Record<MonthReview['status'], string> = { open: 'פתוח לעריכה', in_review: 'בבדיקה', final: 'נסגר לאחר בדיקה' };
+
+const cellCls = 'num px-3 py-3 text-right';
+const dayCell = (v: number, testid: string, grand: boolean, sub?: string) => (
+  <td key={testid} className={cellCls} data-testid={grand ? `grand-${testid}` : testid}>
+    {formatDays(v)}
+    {sub && <div className="num mt-0.5 text-[11px] font-normal leading-tight text-slate-500">{sub}</div>}
+  </td>
+);
+const hourCell = (v: number, testid: string, grand: boolean) => (
+  <td key={testid} className={cellCls} data-testid={grand ? `grand-${testid}` : testid}>
+    {hm(v, '0:00')}
+    <DecimalHours minutes={v} testid={`dec-${testid}`} />
+  </td>
+);
+
+/** The four payroll-preparation key metrics, in the leading positions (req 12). */
+function KeyCells({ a, grand = false }: { a: AttendanceTotals; grand?: boolean }) {
   return (
     <>
-      {days(a.actualWorkedDays * 100, 'actual-days')}
-      {days(a.paidDayHundredths, 'paid-days')}
-      {hours(a.actualWorkedMinutes, 'actual-hours')}
-      {hours(a.payableEquivalentMinutes, 'paid-hours')}
-      {days(a.vacationDayHundredths, 'vacation-days')}
-      {days(a.sickDayHundredths, 'sick-days', a.sickDayHundredths ? `משולם ${formatDays(a.sickPaidDayHundredths)}` : undefined)}
-      {days(a.holidayDayHundredths, 'holiday-days')}
-      {days(a.electionDayHundredths, 'election-days')}
+      {dayCell(a.actualWorkedDays * 100, 'actual-days', grand)}
+      {dayCell(a.paidDayHundredths, 'paid-days', grand)}
+      {hourCell(a.actualWorkedMinutes, 'actual-hours', grand)}
+      {hourCell(a.payableEquivalentMinutes, 'paid-hours', grand)}
     </>
   );
 }
 
-type BizTotals = Awaited<ReturnType<typeof computeBusinessFinancials>>['totals'];
-/** Payroll-preparation columns (₪) — kept apart from all hour columns (1.1.9). */
-const PAY_COLUMNS: [string, (t: BizTotals) => number, (f: MonthFinancials) => number][] = [
-  ['ערך היעדרויות (הערכה)', (t) => t.absenceEstimateAgorot, (f) => f.absenceEstimateAgorot],
-  ['נסיעות', (t) => t.travelAgorot, (f) => f.travel.totalAgorot],
-  ['בונוס', (t) => t.byCategory.bonus, (f) => f.byCategory.bonus],
-  ['דמי הבראה', (t) => t.byCategory.recuperation, (f) => f.byCategory.recuperation],
-  ['מילואים', (t) => t.byCategory.reserve, (f) => f.byCategory.reserve],
-  ['תוספות אחרות', (t) => t.byCategory.other, (f) => f.byCategory.other],
-  ['מקדמות', (t) => t.byCategory.advance, (f) => f.byCategory.advance],
-];
-
-const REVIEW_LABEL: Record<MonthReview['status'], string> = { open: 'פתוח לעריכה', in_review: 'בבדיקה', final: 'נסגר לאחר בדיקה' };
+/** Paid-absence day counts (vacation / sickness / holiday). Election days were removed from the summary (req 1). */
+function AbsenceDayCells({ a, grand = false }: { a: AttendanceTotals; grand?: boolean }) {
+  return (
+    <>
+      {dayCell(a.vacationDayHundredths, 'vacation-days', grand)}
+      {dayCell(a.sickDayHundredths, 'sick-days', grand, a.sickDayHundredths ? `משולם ${formatDays(a.sickPaidDayHundredths)}` : undefined)}
+      {dayCell(a.holidayDayHundredths, 'holiday-days', grand)}
+    </>
+  );
+}
 
 export function SummaryScreen({ businessId }: { businessId: string }) {
   const { repo, go, ym, setYm, dataVersion } = useApp();
@@ -99,6 +92,7 @@ export function SummaryScreen({ businessId }: { businessId: string }) {
   const [business, setBusiness] = useState<Business | null>(null);
   const [summary, setSummary] = useState<BusinessSummary | null>(null);
   const [fin, setFin] = useState<Awaited<ReturnType<typeof computeBusinessFinancials>> | null>(null);
+  const [adjustments, setAdjustments] = useState<MonthlyAdjustment[]>([]);
   const [review, setReview] = useState<MonthReview | null>(null);
   const [currentHash, setCurrentHash] = useState<string | null>(null);
   const [query, setQuery] = useState('');
@@ -110,10 +104,11 @@ export function SummaryScreen({ businessId }: { businessId: string }) {
 
   const key = yearMonthKey(ym.year, ym.month);
   const load = useCallback(async () => {
-    const [b, s, rev] = await Promise.all([repo.getBusiness(businessId), computeBusinessMonth(repo, businessId, ym.year, ym.month), repo.getMonthReview(businessId, key)]);
+    const [b, s, rev, adj] = await Promise.all([repo.getBusiness(businessId), computeBusinessMonth(repo, businessId, ym.year, ym.month), repo.getMonthReview(businessId, key), repo.listAdjustments(businessId, key)]);
     setBusiness(b);
     setSummary(s);
     setFin(await computeBusinessFinancials(repo, businessId, ym.year, ym.month, s));
+    setAdjustments(adj);
     setReview(rev);
     setCurrentHash(await sha256Hex(snapshotOf(s)));
     setAckReview(false);
@@ -140,47 +135,85 @@ export function SummaryScreen({ businessId }: { businessId: string }) {
   if (!business || !summary || !review) return null;
   const g = summary.grandTotal;
   const gp = premiumMinutes(g.buckets);
+  const at = summary.attendanceTotal;
+  const editable = review.status !== 'final';
   const includePay = summary.rows.some((r) => r.totals.payAgorot !== null);
   const blocking = g.errorCount + g.unconfirmedBreaks;
   const periodReview = summary.rows.reduce((a, r) => a + r.result.warnings.filter((w) => w.severity === 'review').length, 0);
   const openReview = g.reviewCount - g.unconfirmedBreaks;
-  const absenceReview = summary.attendanceTotal.reviewDays;
+  const absenceReview = at.reviewDays;
   const changedSinceFinal = review.status === 'final' && review.snapshotHash !== null && review.snapshotHash !== currentHash;
-  const title = `סיכום שעות עובדים - ${monthTitle(ym.year, ym.month)}`;
-  const statusLine = `סטטוס חודש: ${REVIEW_LABEL[review.status]}${changedSinceFinal ? ' (הנתונים השתנו מאז הסגירה)' : ''}${blocking ? ` · ${issuesText(g)}` : ''}`;
+  const title = `סיכום חודשי - ${monthTitle(ym.year, ym.month)}`;
+  const statusLine = `סטטוס: ${REVIEW_LABEL[review.status]}${changedSinceFinal ? ' (הנתונים השתנו מאז הסגירה)' : ''}${blocking ? ` · ${issuesText(g)}` : ''}`;
+
+  // --- inline payroll editing (req 2) -------------------------------------------------------------
+  const canonicalId = (employeeId: string, category: 'advance' | 'bonus') => `inline:${category}:${employeeId}:${key}`;
+  const catAdjustments = (employeeId: string, category: 'advance' | 'bonus') => adjustments.filter((x) => x.employeeId === employeeId && x.category === category);
+  const inlineCell = (employeeId: string, category: 'advance' | 'bonus') => {
+    const list = catAdjustments(employeeId, category);
+    const id = canonicalId(employeeId, category);
+    const others = list.filter((x) => x.id !== id);
+    const total = list.reduce((s, x) => s + x.amountAgorot, 0);
+    const own = list.find((x) => x.id === id)?.amountAgorot ?? 0;
+    return { total, own, editable: editable && others.length === 0, hasDetails: others.length > 0 };
+  };
+  const saveAmount = async (employeeId: string, category: 'advance' | 'bonus', agorot: number) => {
+    const id = canonicalId(employeeId, category);
+    try {
+      if (agorot > 0) await repo.saveAdjustment({ id, businessId, employeeId, yearMonth: key, category, amountAgorot: agorot, date: null, description: 'הוזן בסיכום החודשי', details: {} });
+      else if (adjustments.some((x) => x.id === id)) await repo.deleteAdjustment(businessId, id);
+      else return;
+      await load();
+    } catch (e) {
+      ui.toast(e instanceof Error ? e.message : String(e), 'error');
+    }
+  };
+  const setRecuperation = async (employeeId: string, due: boolean) => {
+    try {
+      const data = await repo.getEmployeeMonth(businessId, employeeId, key);
+      await repo.setEmployeeMonth(businessId, employeeId, key, { ...data, recuperationDue: due });
+      await load();
+    } catch (e) {
+      ui.toast(e instanceof Error ? e.message : String(e), 'error');
+    }
+  };
 
   const setStatus = async (status: MonthReview['status']) => {
     if (status === 'open' && review.status === 'final') {
-      const ok = await ui.confirm({ title: 'פתיחת חודש סגור', message: 'החודש נסגר לאחר בדיקה. לפתוח אותו מחדש לעריכה?', confirmLabel: 'פתיחה מחדש', danger: true });
+      const ok = await ui.confirm({ title: 'פתיחת חודש סגור', message: 'לפתוח את החודש מחדש לעריכה?', confirmLabel: 'פתיחה מחדש', danger: true });
       if (!ok) return;
     }
     let snap: { json: string; hash: string } | null = null;
     if (status === 'final') {
       const json = snapshotOf(summary);
       snap = { json, hash: await sha256Hex(json) };
-      // Safety backup at finalisation.
       await repo.driver.createBackup('finalize').catch(() => undefined);
     }
     await repo.setMonthReview(businessId, key, status, snap, null, status === 'final' ? await closingRules(repo, businessId, ym.year, ym.month) : null);
-    ui.toast(status === 'final' ? 'החודש נסגר. נשמרה תמונת מצב וגיבוי.' : `סטטוס החודש: ${REVIEW_LABEL[status]}`);
+    ui.toast(status === 'final' ? 'החודש נסגר. נשמרה תמונת מצב וגיבוי.' : `סטטוס: ${REVIEW_LABEL[status]}`);
     load();
   };
 
-  const header = (k: SortKey, label: string, cls = '') => (
-    <th className={`whitespace-nowrap px-3 py-2.5 font-medium ${cls}`}>
+  const header = (k: SortKey, label: string, cls = '', tip?: string) => (
+    <th className={`whitespace-nowrap px-3 py-2.5 font-medium ${cls}`} title={tip}>
       <button className={`inline-flex items-center gap-1 hover:text-ink ${sort.key === k ? 'text-ink' : ''}`} onClick={() => setSort((s) => ({ key: k, dir: s.key === k ? (-s.dir as 1 | -1) : k === 'name' ? 1 : -1 }))}>
         {label}
         {sort.key === k && <span className="text-[10px]">{sort.dir === 1 ? '▲' : '▼'}</span>}
       </button>
     </th>
   );
+  const payHeader = (label: string, lead = false, tip?: string) => (
+    <th key={label} className={`whitespace-nowrap px-3 py-2.5 font-medium ${lead ? 'border-s border-line' : ''}`} title={tip}>
+      {label}
+    </th>
+  );
 
   const doExport = (f: 'xlsx' | 'csv') =>
-    repo
-      .listAdjustments(businessId, key)
-      .then((items) => exportBusinessMonth(f, business, summary, ym, statusLine, fin, items))
+    exportBusinessMonth(f, business, summary, ym, statusLine, fin, adjustments)
       .then((m) => m && ui.toast(m))
       .catch((e) => ui.toast(String(e), 'error'));
+
+  const colCount = 10 + 3 + 6 + (includePay ? 1 : 0) + 1; // key(4)+hours(5)+net already in 10; see render
 
   return (
     <div>
@@ -205,7 +238,7 @@ export function SummaryScreen({ businessId }: { businessId: string }) {
             <Button icon={<IconDownload size={16} />} onClick={() => doExport('csv')}>
               CSV
             </Button>
-            <Button icon={<IconPrinter size={16} />} onClick={() => window.print()} title="להפקת PDF בחרו 'שמירה כ-PDF' בחלון ההדפסה">
+            <Button icon={<IconPrinter size={16} />} onClick={() => window.print()} title="בחלון ההדפסה אפשר לשמור כ-PDF">
               הדפסה / PDF
             </Button>
             <Button variant="ghost" onClick={() => go({ name: 'employees', businessId })}>
@@ -219,16 +252,16 @@ export function SummaryScreen({ businessId }: { businessId: string }) {
         <div className="text-[12px]">
           {business.name} · {statusLine}
         </div>
-        <div className="text-[11px]">ערך עליון בכל תא שעות: ש:דד · ערך תחתון: {DECIMAL_HOURS_LABEL}</div>
+        <div className="text-[11px]">בכל תא שעות: שורה עליונה ש:דד · שורה תחתונה {DECIMAL_HOURS_LABEL}</div>
         <div className="text-[10px]">{COPYRIGHT}</div>
       </div>
 
       {(blocking > 0 || openReview > 0 || g.complianceCount > 0 || absenceReview > 0 || changedSinceFinal) && (
-        <div className="mb-4 flex flex-wrap items-center gap-2 rounded-xl bg-amber-50 px-4 py-3 text-[13px] text-amber-900 ring-1 ring-amber-200">
+        <div className="no-print mb-4 flex flex-wrap items-center gap-2 rounded-xl bg-amber-50 px-4 py-3 text-[13px] text-amber-900 ring-1 ring-amber-200">
           <IconAlert size={18} />
           {changedSinceFinal && <b>הנתונים השתנו לאחר סגירת החודש.</b>}
           <span>
-            הדוח כולל: {g.unconfirmedBreaks} הפסקות לא מאושרות · {g.incompleteEntries} רישומים חסרים · {g.errorCount - g.incompleteEntries} שגיאות · {openReview} סימונים לבדיקה · {g.complianceCount} אזהרות ציות{absenceReview > 0 ? ` · ${absenceReview} ימי היעדרות לבדיקה` : ''}.
+            {g.unconfirmedBreaks} הפסקות לא מאושרות · {g.incompleteEntries} רישומים חסרים · {g.errorCount - g.incompleteEntries} שגיאות · {openReview} לבדיקה · {g.complianceCount} אזהרות ציות{absenceReview > 0 ? ` · ${absenceReview} ימי היעדרות לבדיקה` : ''}
           </span>
         </div>
       )}
@@ -241,10 +274,9 @@ export function SummaryScreen({ businessId }: { businessId: string }) {
           </div>
           <div className="flex items-center gap-4 text-[12px] text-ink-soft">
             <span data-testid="decimal-legend" title={DECIMAL_HOURS_TITLE}>
-              ערך עליון: ש:דד · <span className="text-slate-500">ערך תחתון: {DECIMAL_HOURS_LABEL}</span>
+              בתא שעות: ש:דד · <span className="text-slate-500">{DECIMAL_HOURS_LABEL}</span>
             </span>
-            <span>ימים: שברי יום (0.50 = חצי יום) · שעות משולמות = בפועל + היעדרות בתשלום, ללא תוספות 125%/150%</span>
-            <span>לחיצה על שורה מציגה פירוט שבועי והתראות</span>
+            <span>מקדמות ובונוסים ב-₪ · הבראה: כן/לא · לחיצה על שורה מציגה פירוט</span>
           </div>
         </div>
         <div className="overflow-x-auto">
@@ -252,45 +284,45 @@ export function SummaryScreen({ businessId }: { businessId: string }) {
             <thead>
               <tr className="border-b border-line bg-slate-50/70 text-right text-[12px] text-ink-soft">
                 {header('name', 'עובד', 'ps-4')}
-                {header('days', 'ימי עבודה')}
-                {header('regular', 'שעות רגילות')}
+                {header('aDays', 'ימים בפועל', '', 'ימים שבהם בוצעה עבודה בפועל')}
+                {header('pDays', 'ימים משולמים', '', 'ימי עבודה + ימי היעדרות בתשלום')}
+                {header('aHours', 'שעות בפועל', '', 'שעות עבודה נטו בפועל')}
+                {header('pHours', 'שעות משולמות', '', 'שעות בפועל + שעות היעדרות בתשלום')}
+                {header('regular', 'שעות רגילות', 'border-s border-line')}
                 {header('ot125', 'נוספות 125%')}
                 {header('ot150', 'נוספות 150%')}
-                {header('premium', 'מנוחה / חג (150·175·200)')}
-                {header('net', 'סה״כ שעות נטו')}
-                {header('aDays', 'ימים בפועל', 'border-s border-line')}
-                {header('pDays', 'ימים משולמים')}
-                {header('aHours', 'שעות בפועל')}
-                {header('pHours', 'שעות משולמות')}
-                {header('vac', 'ימי חופשה')}
+                {header('premium', 'מנוחה / חג', '', '150% · 175% · 200%')}
+                {header('net', 'סה״כ נטו')}
+                {header('vac', 'ימי חופשה', 'border-s border-line')}
                 {header('sick', 'ימי מחלה')}
                 {header('hol', 'ימי חג')}
-                {header('elec', 'ימי בחירות')}
-                {PAY_COLUMNS.map(([label], i) => (
-                  <th key={label} className={`whitespace-nowrap px-3 py-2.5 font-medium ${i === 0 ? 'border-s border-line' : ''}`} title="רכיבי שכר (₪) — אינם שעות עבודה">
-                    {label}
-                  </th>
-                ))}
-                {includePay && <th className="px-3 py-2.5 font-medium">הערכת עלות</th>}
-                <th className="px-3 py-2.5 font-medium">פריטים פתוחים</th>
+                {payHeader('ערך היעדרויות', true, 'הערכה: שכר שעתי × שעות × שיעור')}
+                {payHeader('נסיעות')}
+                {payHeader('מקדמות', false, 'ניתן לעריכה – ₪')}
+                {payHeader('בונוסים', false, 'ניתן לעריכה – ₪')}
+                {payHeader('הבראה', false, 'זכאות להבראה החודש')}
+                {payHeader('מילואים')}
+                {includePay && payHeader('הערכת עלות', false, 'שכר שעתי × שעות – אומדן בלבד')}
+                {payHeader('פריטים פתוחים')}
               </tr>
             </thead>
             <tbody>
               {rows.map((r) => (
                 <Fragment key={r.employeeId}>
                   <SummaryRow
-                    name={r.name}
-                    number={r.employeeNumber}
-                    t={r.totals}
-                    a={r.result.attendance}
+                    row={r}
                     f={fin?.byEmployee.get(r.employeeId) ?? null}
                     includePay={includePay}
                     expanded={expanded === r.employeeId}
                     onToggle={() => setExpanded(expanded === r.employeeId ? null : r.employeeId)}
+                    advance={inlineCell(r.employeeId, 'advance')}
+                    bonus={inlineCell(r.employeeId, 'bonus')}
+                    onSaveAmount={(cat, agorot) => saveAmount(r.employeeId, cat, agorot)}
+                    onSetRecuperation={(due) => setRecuperation(r.employeeId, due)}
                   />
                   {expanded === r.employeeId && (
                     <tr className="bg-slate-50/50">
-                      <td colSpan={(includePay ? 17 : 16) + PAY_COLUMNS.length} className="px-6 py-4">
+                      <td colSpan={colCount} className="px-6 py-4">
                         <EmployeeDetail row={r} onOpen={() => go({ name: 'attendance', businessId, employeeId: r.employeeId })} />
                       </td>
                     </tr>
@@ -298,9 +330,9 @@ export function SummaryScreen({ businessId }: { businessId: string }) {
                 </Fragment>
               ))}
               <tr className="border-t-2 border-slate-300 bg-slate-50 font-semibold" data-testid="grand-total">
-                <td className="px-4 py-3">סה״כ לעסק ({summary.rows.length} עובדים)</td>
-                <td className="num px-3 py-3 text-right">{g.daysWorked}</td>
-                <td className="num px-3 py-3 text-right">
+                <td className="px-4 py-3">סה״כ ({summary.rows.length} עובדים)</td>
+                <KeyCells a={at} grand />
+                <td className="num border-s border-line px-3 py-3 text-right">
                   {hm(g.buckets.regular, '0:00')}
                   <DecimalHours minutes={g.buckets.regular} testid="dec-regular" />
                 </td>
@@ -320,26 +352,41 @@ export function SummaryScreen({ businessId }: { businessId: string }) {
                   {hm(g.netMinutes, '0:00')}
                   <DecimalHours minutes={g.netMinutes} testid="dec-net" />
                 </td>
-                <AttendanceCells a={summary.attendanceTotal} total />
-                {PAY_COLUMNS.map(([label, pick]) => (
-                  <td key={label} className="num px-3 py-3 text-right" data-testid={`grand-pay-${label}`}>
-                    {fin ? shekelsText(pick(fin.totals)) : '—'}
-                  </td>
-                ))}
+                <AbsenceDayCells a={at} grand />
+                <td className="num border-s border-line px-3 py-3 text-right" data-testid="grand-pay-absence">
+                  {fin ? shekelsText(fin.totals.absenceEstimateAgorot) : '—'}
+                </td>
+                <td className="num px-3 py-3 text-right" data-testid="grand-pay-travel">
+                  {fin ? shekelsText(fin.totals.travelAgorot) : '—'}
+                </td>
+                <td className="num px-3 py-3 text-right" data-testid="grand-pay-advance">
+                  {fin ? shekelsText(fin.totals.byCategory.advance) : '—'}
+                </td>
+                <td className="num px-3 py-3 text-right" data-testid="grand-pay-bonus">
+                  {fin ? shekelsText(fin.totals.byCategory.bonus) : '—'}
+                </td>
+                <td className="num px-3 py-3 text-right" data-testid="grand-pay-recup">
+                  {fin ? [...fin.byEmployee.values()].filter((x) => x.recuperationDue).length || '—' : '—'}
+                </td>
+                <td className="num px-3 py-3 text-right" data-testid="grand-pay-reserve">
+                  {fin ? shekelsText(fin.totals.byCategory.reserve) : '—'}
+                </td>
                 {includePay && <td className="num px-3 py-3 text-right">{shekels(g.payAgorot)}</td>}
                 <td className="px-3 py-3 text-[12px] font-normal">{issuesText(g) || '—'}</td>
               </tr>
             </tbody>
           </table>
         </div>
-        {includePay && <p className="px-4 py-2 text-[12px] text-ink-soft">הערכת העלות מבוססת על שכר שעתי ושיעורי הגמול בלבד. אינה כוללת מס, ביטוח לאומי, פנסיה, חופשה, נסיעות או רכיבי שכר אחרים ואינה תלוש שכר.</p>}
+        <p className="px-4 py-2 text-[12px] text-ink-soft">
+          סכומי ₪ הם להכנת שכר בלבד – אינם תלוש שכר. הערכת העלות מבוססת על שכר שעתי ושיעורי הגמול בלבד (ללא מס, ביטוח לאומי ופנסיה). רכיבי שכר מפורטים נערכים בדוח השעות של העובד.
+        </p>
       </Card>
 
       <Card className="no-print mt-5 p-5">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
             <div className="flex items-center gap-2 text-[15px] font-semibold">
-              <IconLock size={18} /> בדיקה וסגירת החודש
+              <IconLock size={18} /> סגירת החודש
               <span data-testid="review-status">
                 <Badge tone={review.status === 'final' ? (changedSinceFinal ? 'red' : 'green') : review.status === 'in_review' ? 'blue' : 'slate'}>{REVIEW_LABEL[review.status]}</Badge>
               </span>
@@ -349,20 +396,18 @@ export function SummaryScreen({ businessId }: { businessId: string }) {
               <Check ok={g.incompleteEntries === 0} text={`רישומים חסרים: ${g.incompleteEntries}`} />
               <Check ok={g.errorCount - g.incompleteEntries === 0} text={`שגיאות נתונים: ${g.errorCount - g.incompleteEntries}`} />
               <Check ok={g.unconfirmedBreaks === 0} text={`הפסקות משוערות שלא אושרו: ${g.unconfirmedBreaks}`} />
-              <Check ok={openReview === 0 || ackReview} warn text={`סימונים לבדיקה פתוחים (כולל ${periodReview} ברמת עובד): ${openReview}`} />
+              <Check ok={openReview === 0 || ackReview} warn text={`סימונים לבדיקה (כולל ${periodReview} ברמת עובד): ${openReview}`} />
               <Check ok={g.complianceCount === 0 || ackCompliance} warn text={`אזהרות ציות: ${g.complianceCount}`} />
-              <Check ok={absenceReview === 0 || ackAbsence} warn text={`ימי היעדרות שהזכאות לתשלום בהם דורשת בדיקה: ${absenceReview}`} />
+              <Check ok={absenceReview === 0 || ackAbsence} warn text={`ימי היעדרות לבדיקה: ${absenceReview}`} />
             </ul>
-            <p className="mt-3 max-w-2xl text-[12px] leading-relaxed text-ink-soft">
-              סגירת החודש שומרת תמונת מצב של החישוב וגיבוי. היא מאשרת שהנתונים נבדקו – ואינה קביעה שהדוח עומד בכל דרישות הדין. סיווגים הסכמיים, היתרים ועבודה בחג/מנוחה דורשים בדיקה מקצועית.
-            </p>
+            <p className="mt-3 max-w-2xl text-[12px] leading-relaxed text-ink-soft">סגירת החודש שומרת תמונת מצב וגיבוי ומסמנת שהנתונים נבדקו. אינה קביעה משפטית — סיווגים הסכמיים ועבודה בחג/מנוחה דורשים בדיקה מקצועית.</p>
           </div>
           <div className="flex min-w-[280px] flex-col gap-2">
             {review.status !== 'final' && (
               <>
-                {openReview > 0 && <Checkbox checked={ackReview} onChange={setAckReview} label="בדקתי את הסימונים לבדיקה והם מטופלים" />}
+                {openReview > 0 && <Checkbox checked={ackReview} onChange={setAckReview} label="בדקתי את הסימונים לבדיקה" />}
                 {g.complianceCount > 0 && <Checkbox checked={ackCompliance} onChange={setAckCompliance} label="ראיתי את אזהרות הציות" />}
-                {absenceReview > 0 && <Checkbox checked={ackAbsence} onChange={setAckAbsence} label="בדקתי את ימי ההיעדרות המסומנים לבדיקה" />}
+                {absenceReview > 0 && <Checkbox checked={ackAbsence} onChange={setAckAbsence} label="בדקתי את ימי ההיעדרות המסומנים" />}
                 {review.status === 'open' && <Button onClick={() => setStatus('in_review')}>סימון כ"בבדיקה"</Button>}
                 <Button
                   variant="primary"
@@ -371,9 +416,9 @@ export function SummaryScreen({ businessId }: { businessId: string }) {
                   onClick={() => setStatus('final')}
                   data-testid="finalize"
                 >
-                  סגירת החודש לאחר בדיקה
+                  סגירת החודש
                 </Button>
-                {blocking > 0 && <span className="text-[12px] text-red-700">לא ניתן לסגור כל עוד קיימים רישומים חסרים, שגיאות או הפסקות לא מאושרות.</span>}
+                {blocking > 0 && <span className="text-[12px] text-red-700">לא ניתן לסגור כל עוד יש רישומים חסרים, שגיאות או הפסקות לא מאושרות.</span>}
               </>
             )}
             {review.status === 'final' && (
@@ -391,46 +436,51 @@ export function SummaryScreen({ businessId }: { businessId: string }) {
 function Check({ ok, text, warn }: { ok: boolean; text: string; warn?: boolean }) {
   return (
     <li className="flex items-center gap-2">
-      <span className={`flex h-4 w-4 items-center justify-center rounded-full ${ok ? 'bg-emerald-100 text-emerald-700' : warn ? 'bg-amber-100 text-amber-700' : 'bg-red-100 text-red-700'}`}>
-        {ok ? <IconCheck size={11} /> : '!'}
-      </span>
+      <span className={`flex h-4 w-4 items-center justify-center rounded-full ${ok ? 'bg-emerald-100 text-emerald-700' : warn ? 'bg-amber-100 text-amber-700' : 'bg-red-100 text-red-700'}`}>{ok ? <IconCheck size={11} /> : '!'}</span>
       {text}
     </li>
   );
 }
 
+type InlineInfo = { total: number; own: number; editable: boolean; hasDetails: boolean };
+
 function SummaryRow({
-  name,
-  number,
-  t,
-  a,
+  row,
   f,
   includePay,
   expanded,
   onToggle,
+  advance,
+  bonus,
+  onSaveAmount,
+  onSetRecuperation,
 }: {
-  name: string;
-  number: string | null;
-  t: PeriodTotals;
-  a: AttendanceTotals;
+  row: BusinessSummaryRow;
   f: MonthFinancials | null;
   includePay: boolean;
   expanded: boolean;
   onToggle: () => void;
+  advance: InlineInfo;
+  bonus: InlineInfo;
+  onSaveAmount: (cat: 'advance' | 'bonus', agorot: number) => void;
+  onSetRecuperation: (due: boolean) => void;
 }) {
+  const t = row.totals as PeriodTotals;
+  const a = row.result.attendance;
   const p = premiumMinutes(t.buckets);
   const issues = [issuesText(t), a.reviewDays ? `${a.reviewDays} ימי היעדרות לבדיקה` : ''].filter(Boolean).join(', ');
+  const stop = (e: React.MouseEvent) => e.stopPropagation();
   return (
-    <tr className={`cursor-pointer border-b border-line/70 hover:bg-slate-50/60 ${expanded ? 'bg-slate-50/60' : ''}`} onClick={onToggle} data-testid="summary-row">
-      <td className="px-4 py-3">
+    <tr className={`border-b border-line/70 hover:bg-slate-50/60 ${expanded ? 'bg-slate-50/60' : ''}`} data-testid="summary-row">
+      <td className="cursor-pointer px-4 py-3" onClick={onToggle}>
         <div className="flex items-center gap-2">
           <IconChevronLeft size={15} className={`no-print text-slate-400 transition ${expanded ? '-rotate-90' : ''}`} />
-          <span className="font-medium">{name}</span>
-          {number && <span className="num text-[12px] text-ink-soft">#{number}</span>}
+          <span className="font-medium">{row.name}</span>
+          {row.employeeNumber && <span className="num text-[12px] text-ink-soft">#{row.employeeNumber}</span>}
         </div>
       </td>
-      <td className="num px-3 py-3 text-right">{t.daysWorked}</td>
-      <td className="num px-3 py-3 text-right">
+      <KeyCells a={a} />
+      <td className="num border-s border-line px-3 py-3 text-right">
         {hm(t.buckets.regular, '0:00')}
         <DecimalHours minutes={t.buckets.regular} testid="dec-regular" />
       </td>
@@ -456,15 +506,77 @@ function SummaryRow({
         {hm(t.netMinutes, '0:00')}
         <DecimalHours minutes={t.netMinutes} testid="dec-net" />
       </td>
-      <AttendanceCells a={a} />
-      {PAY_COLUMNS.map(([label, , pickOne]) => (
-        <td key={label} className="num px-3 py-3 text-right text-[13px]">
-          {f ? (pickOne(f) ? shekelsText(pickOne(f)) : '–') : '–'}
-        </td>
-      ))}
+      <AbsenceDayCells a={a} />
+      <td className="num border-s border-line px-3 py-3 text-right text-[13px]">{f && f.absenceEstimateAgorot ? shekelsText(f.absenceEstimateAgorot) : '–'}</td>
+      <td className="num px-3 py-3 text-right text-[13px]">{f && f.travel.totalAgorot ? shekelsText(f.travel.totalAgorot) : '–'}</td>
+      <td className="px-2 py-2" onClick={stop} data-testid="cell-advance">
+        <MoneyCell info={advance} onSave={(v) => onSaveAmount('advance', v)} />
+      </td>
+      <td className="px-2 py-2" onClick={stop} data-testid="cell-bonus">
+        <MoneyCell info={bonus} onSave={(v) => onSaveAmount('bonus', v)} />
+      </td>
+      <td className="px-2 py-2 text-center" onClick={stop} data-testid="cell-recup">
+        <select
+          className="field-input num !w-16 px-1 py-1 text-center text-[13px]"
+          value={f?.recuperationDue ? 'yes' : 'no'}
+          onChange={(e) => onSetRecuperation(e.target.value === 'yes')}
+          aria-label={`הבראה ${row.name}`}
+        >
+          <option value="no">לא</option>
+          <option value="yes">כן</option>
+        </select>
+      </td>
+      <td className="num px-3 py-3 text-right text-[13px]">{f && f.byCategory.reserve ? shekelsText(f.byCategory.reserve) : '–'}</td>
       {includePay && <td className="num px-3 py-3 text-right">{shekels(t.payAgorot)}</td>}
-      <td className="px-3 py-3">{issues ? <Badge tone={t.errorCount || t.unconfirmedBreaks ? 'red' : 'amber'}>{issues}</Badge> : <Badge tone="green">תקין לבדיקה</Badge>}</td>
+      <td className="cursor-pointer px-3 py-3" onClick={onToggle}>
+        {issues ? <Badge tone={t.errorCount || t.unconfirmedBreaks ? 'red' : 'amber'}>{issues}</Badge> : <Badge tone="green">תקין לבדיקה</Badge>}
+      </td>
     </tr>
+  );
+}
+
+/** Editable NIS cell (advances / bonuses). Read-only total when detailed entries exist or the month is closed. */
+function MoneyCell({ info, onSave }: { info: InlineInfo; onSave: (agorot: number) => void }) {
+  const [text, setText] = useState('');
+  const [editing, setEditing] = useState(false);
+  const display = info.total ? (info.total / 100).toFixed(2) : '';
+  if (!info.editable) {
+    return (
+      <div className="num px-1 text-right text-[13px]" title={info.hasDetails ? 'קיימים רכיבים מפורטים – עריכה בדוח השעות של העובד' : 'חודש סגור'}>
+        {info.total ? shekelsText(info.total) : '–'}
+        {info.hasDetails && <span className="ms-1 text-[10px] text-amber-700">✎</span>}
+      </div>
+    );
+  }
+  return (
+    <input
+      className="field-input num !w-24 px-2 py-1 text-left text-[13px]"
+      inputMode="decimal"
+      placeholder="₪0"
+      value={editing ? text : display}
+      aria-label="סכום"
+      onFocus={(e) => {
+        setEditing(true);
+        setText(display);
+        e.currentTarget.select();
+      }}
+      onChange={(e) => setText(e.target.value)}
+      onBlur={() => {
+        setEditing(false);
+        const t = text.trim().replace(/[₪,\s]/g, '');
+        if (t === display) return;
+        if (t === '') return onSave(0);
+        const m = /^(\d{1,7})(?:\.(\d{1,2}))?$/.exec(t);
+        if (m) onSave(+m[1] * 100 + (m[2] ? +m[2].padEnd(2, '0') : 0));
+      }}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') e.currentTarget.blur();
+        if (e.key === 'Escape') {
+          setText(display);
+          e.currentTarget.blur();
+        }
+      }}
+    />
   );
 }
 
@@ -501,9 +613,9 @@ function EmployeeDetail({ row, onOpen }: { row: BusinessSummaryRow; onOpen: () =
           </tbody>
         </table>
         <p className="mt-2 text-[12px] text-ink-soft">
-          שבועות החוצים חודש מחושבים כשבוע שלם; כל משמרת נספרת בחודש של יום תחילתה. ברוטו: {hm(t.grossMinutes, '0:00')} · הפסקות: {hm(t.breakMinutes, '0:00')}
-          {t.paidBreakMinutes ? ` · הפסקות בתשלום: ${hm(t.paidBreakMinutes)}` : ''}
-          {t.contractExcessMinutes ? ` · שעות עודפות 100%: ${hm(t.contractExcessMinutes)}` : ''}
+          ברוטו {hm(t.grossMinutes, '0:00')} · הפסקות {hm(t.breakMinutes, '0:00')}
+          {t.paidBreakMinutes ? ` · בתשלום ${hm(t.paidBreakMinutes)}` : ''}
+          {t.contractExcessMinutes ? ` · עודפות 100% ${hm(t.contractExcessMinutes)}` : ''}
         </p>
         <Button size="sm" variant="primary" className="mt-3" onClick={onOpen}>
           פתיחת דוח השעות
@@ -515,7 +627,9 @@ function EmployeeDetail({ row, onOpen }: { row: BusinessSummaryRow; onOpen: () =
           {warnings.length === 0 && <li className="text-ink-soft">אין התראות פתוחות</li>}
           {warnings.map((w, i) => (
             <li key={i} className="flex items-start gap-2">
-              <Badge tone={severityTone[w.severity]}>{severityLabel[w.severity]}</Badge>
+              <WarningTip warning={w} name={row.name}>
+                <Badge tone={severityTone[w.severity]}>{severityLabel[w.severity]}</Badge>
+              </WarningTip>
               <span>
                 {w.date && <span className="num ml-1.5 text-ink-soft">{formatDateHe(w.date).slice(0, 5)}</span>}
                 {w.message}
@@ -528,7 +642,6 @@ function EmployeeDetail({ row, onOpen }: { row: BusinessSummaryRow; onOpen: () =
   );
 }
 
-/** Decimal-hours line for the weekly-rest / holiday 150·175·200 triple. */
 function DecimalTriple({ a, b, c }: { a: number; b: number; c: number }) {
   return (
     <div className="num mt-0.5 text-right text-[11px] font-normal leading-tight text-slate-500" title={DECIMAL_HOURS_TITLE} data-testid="dec-premium">

@@ -106,6 +106,8 @@ export interface MonthFinancials {
     informationalAgorot: number;
   };
   count: number;
+  /** 1.1.12: recuperation eligibility flag for the month (req 2). */
+  recuperationDue: boolean;
 }
 
 export function monthFinancials(
@@ -157,6 +159,7 @@ export function monthFinancials(
       informationalAgorot: info,
     },
     count: adjustments.length,
+    recuperationDue: !!month.recuperationDue,
   };
 }
 

@@ -157,7 +157,6 @@ export const BUSINESS_ATTENDANCE_HEADERS = [
   'ימי מחלה – שווה ערך משולם',
   'ניכוי ממכסת מחלה (הערכה)',
   'ימי חג',
-  'ימי בחירות',
   'ימי היעדרות ללא תשלום',
   'ימים לבדיקה',
 ];
@@ -172,35 +171,32 @@ function businessAttendanceCells(a: AttendanceTotals): Cell[] {
     DY(a.sickPaidDayHundredths),
     DY(a.sickBalanceDeductionHundredths),
     DY(a.holidayDayHundredths),
-    DY(a.electionDayHundredths),
     DY(a.unpaidDayHundredths),
     I(a.reviewDays),
   ];
 }
 
-/** Payroll-preparation columns (₪, 1.1.9) — never hours. */
-export const BUSINESS_PAY_HEADERS = ['ערך היעדרויות (הערכה, ₪)', 'נסיעות (₪)', 'בונוס (₪)', 'דמי הבראה (₪)', 'מילואים (₪)', 'תוספות אחרות (₪)', 'מקדמות (₪)', 'ניכויים שאושרו (₪)', 'החזרים למעסיק (₪)'];
-function payCells(f: MonthFinancials | null): Cell[] {
+/** Payroll-preparation columns matching the monthly-summary display (1.1.12): election and other-additions removed; recuperation is a כן/לא flag. */
+export const BUSINESS_PAY_HEADERS = ['ערך היעדרויות (הערכה, ₪)', 'נסיעות (₪)', 'מקדמות (₪)', 'בונוסים (₪)', 'הבראה', 'מילואים (₪)'];
+function payCells(f: MonthFinancials | null, recupCell?: Cell): Cell[] {
   const m = (v: number | undefined): Cell => ({ kind: 'money', v: v ?? 0 });
   return [
     m(f?.absenceEstimateAgorot),
     m(f?.travel.totalAgorot),
-    m(f?.byCategory.bonus),
-    m(f?.byCategory.recuperation),
-    m(f?.byCategory.reserve),
-    m(f?.byCategory.other),
     m(f?.byCategory.advance),
-    m(f?.totals.authorizedDeductionsAgorot),
-    m(f?.totals.employerReimbursementsAgorot),
+    m(f?.byCategory.bonus),
+    recupCell ?? T(f?.recuperationDue ? 'כן' : 'לא'),
+    m(f?.byCategory.reserve),
   ];
 }
 type BusinessFin = { byEmployee: Map<string, MonthFinancials>; totals: ReturnType<typeof sumFinancials> } | null;
 
 export function businessMonthTable(title: string, s: BusinessSummary, includePay: boolean, fin: BusinessFin = null): Table {
+  // Order mirrors the on-screen summary (req 12): the four key metrics lead, then hours, absence days, pay.
   const headers = [
     'עובד',
     'מספר עובד',
-    'ימי עבודה',
+    ...BUSINESS_ATTENDANCE_HEADERS,
     'שעות רגילות',
     'נוספות 125%',
     'נוספות 150%',
@@ -210,17 +206,16 @@ export function businessMonthTable(title: string, s: BusinessSummary, includePay
     'לא מסווג',
     'סה״כ שעות נטו',
     'סך הפסקות',
-    ...BUSINESS_ATTENDANCE_HEADERS,
     ...(includePay ? ['הערכת עלות (₪)'] : []),
     ...(fin ? BUSINESS_PAY_HEADERS : []),
     'פריטים פתוחים',
   ];
-  const row = (name: string, num: string, t: PeriodTotals, a: AttendanceTotals): Cell[] => {
+  const row = (name: string, num: string, t: PeriodTotals, a: AttendanceTotals, recupCell?: Cell): Cell[] => {
     const p = premiumMinutes(t.buckets);
     return [
       T(name),
       T(num),
-      I(t.daysWorked),
+      ...businessAttendanceCells(a),
       D(t.buckets.regular),
       D(t.buckets.ot125),
       D(t.buckets.ot150),
@@ -230,9 +225,8 @@ export function businessMonthTable(title: string, s: BusinessSummary, includePay
       D(t.buckets.unclassified),
       D(t.netMinutes),
       D(t.breakMinutes),
-      ...businessAttendanceCells(a),
       ...(includePay ? [{ kind: 'money', v: t.payAgorot } as Cell] : []),
-      ...(fin ? payCells(f) : []),
+      ...(fin ? payCells(f, recupCell) : []),
       T(issuesText(t)),
     ];
   };
@@ -250,7 +244,8 @@ export function businessMonthTable(title: string, s: BusinessSummary, includePay
       totals: t,
     } as unknown as MonthFinancials;
   }
-  rows.push(row('סה״כ לעסק', '', s.grandTotal, s.attendanceTotal));
+  const recupDue = fin ? [...fin.byEmployee.values()].filter((x) => x.recuperationDue).length : 0;
+  rows.push(row('סה״כ לעסק', '', s.grandTotal, s.attendanceTotal, fin ? T(`${recupDue} כן`) : undefined));
   return { title, headers, rows, totalRow: rows.length - 1 };
 }
 

@@ -85,6 +85,8 @@ export interface MonthlyAdjustment {
 export interface EmployeeMonthData {
   paidDayOverride?: { minutes: number; reason: string; calculatedMinutes: number | null } | null;
   travel?: { eligibleDays: number; reason: string; autoDays: number } | null;
+  /** 1.1.12 (req 2): recuperation (הבראה) eligibility this month — a manual כן/לא flag, not an amount. */
+  recuperationDue?: boolean | null;
 }
 
 export interface BulkImportInput {
@@ -984,6 +986,7 @@ export class Repository {
     const clean: EmployeeMonthData = {};
     if (o) clean.paidDayOverride = o;
     if (tr) clean.travel = tr;
+    if (data.recuperationDue) clean.recuperationDue = true;
     await this.driver.batch([
       Object.keys(clean).length
         ? {

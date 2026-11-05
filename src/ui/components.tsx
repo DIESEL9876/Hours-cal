@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { IconAlert, IconCheck, IconInfo, IconX } from './icons';
-import { formatDecimalHours, type Severity } from '../engine';
+import { formatDecimalHours, type Severity, type Warning } from '../engine';
 
 // ---------------------------------------------------------------------------
 // Buttons
@@ -186,6 +186,70 @@ export const severityLabel: Record<Severity, string> = {
   compliance: 'אזהרת ציות',
   info: 'מידע',
 };
+
+/** What each severity means and the general expectation (req 5). */
+export const severityMeaning: Record<Severity, string> = {
+  error: 'שגיאה — חובה לתקן לפני סגירת החודש.',
+  review: 'נדרשת בדיקה ידנית של חשב/ת השכר.',
+  compliance: 'אזהרת ציות — חריגה אפשרית מהוראת דין. השעות והשכר נשמרים; יש לבדוק.',
+  info: 'מידע בלבד.',
+};
+
+/** Short, concrete next action per warning code (req 5). Falls back to the severity meaning. */
+const ACTION_BY_CODE: Record<string, string> = {
+  BREAK_UNCONFIRMED: 'לאשר שההפסקה ניתנה בפועל, או להזין את משך ההפסקה הנכון בדוח השעות.',
+  INCOMPLETE: 'להשלים את שעת הכניסה או היציאה החסרה ביום זה.',
+  MISSING_RECORD: 'להזין שעות ליום זה, או לסמן אותו כחופשה/מחלה/היעדרות.',
+  UNSCHEDULED_DAY_WORK: 'העבודה בוצעה ביום שאינו יום עבודה רגיל. לאשר שהנתון נכון.',
+  WEEKLY_OT_LIMIT: 'השבוע חורג ממכסת השעות הנוספות. לבדוק מול היתר העסקה.',
+  WEEKLY_TOTAL_LIMIT: 'סך השעות בשבוע חורג מהמותר. לבדוק מול היתר העסקה.',
+  WEEKLY_REST_SHORT: 'המנוחה השבועית קצרה מ-36 שעות. לבדוק את סידור העבודה.',
+  NO_SHORT_DAY: 'לא הוגדר יום מקוצר. אם מגיע — לקבוע אותו בהגדרות החישוב של העובד.',
+  EXEMPT_PROFILE: 'לוודא שהעובד אכן מוחרג מחוק שעות עבודה ומנוחה.',
+  CUSTOM_PROFILE: 'לוודא שהתקנים שהוזנו תואמים את ההסכם החל על העובד.',
+  MINOR_PROFILE_ADULT: 'העובד בגיר לפי תאריך הלידה. לעדכן את הפרופיל החוקי.',
+  AGREEMENT_MIN_WAGE: 'השכר נמוך משכר המינימום הענפי. לבדוק ולהתאים את השכר.',
+  YOUTH_PAY_REVIEW: 'עבודה אסורה שבוצעה משולמת במלואה; סיווג הגמול דורש בדיקת חשב/ת שכר.',
+};
+
+/** True when the code is a youth-law flag — all of them ask to review the youth employment terms. */
+function youthAction(code: string): string | null {
+  if (!code.startsWith('YOUTH_')) return null;
+  return ACTION_BY_CODE[code] ?? 'חריגה מחוק עבודת הנוער. השעות נשמרות; יש לבדוק את תנאי ההעסקה.';
+}
+
+export function warningAction(w: Warning): string {
+  return ACTION_BY_CODE[w.code] ?? youthAction(w.code) ?? severityMeaning[w.severity];
+}
+
+/**
+ * Accessible explanation for a warning / review indicator (req 5). Wraps the indicator; the tooltip appears on hover
+ * and on keyboard focus, and states what, why, who/when, and the action to take.
+ */
+export function WarningTip({ warning, name, children }: { warning: Warning; name?: string; children: ReactNode }) {
+  const w = warning;
+  return (
+    <span className="group relative inline-flex outline-none" tabIndex={0} role="note" aria-label={`${severityLabel[w.severity]}. ${w.message}. ${warningAction(w)}`}>
+      {children}
+      <span
+        role="tooltip"
+        className="pointer-events-none absolute right-0 top-full z-40 mt-1 hidden w-72 rounded-lg border border-line bg-white p-3 text-right text-[12px] leading-relaxed text-ink shadow-xl group-hover:block group-focus-within:block"
+      >
+        <span className="mb-1 block font-semibold">{severityLabel[w.severity]}</span>
+        <span className="block text-ink-soft">{severityMeaning[w.severity]}</span>
+        <span className="mt-1.5 block">{w.message}</span>
+        {(name || w.date) && (
+          <span className="mt-1.5 block text-ink-soft">
+            {name ? `עובד: ${name}` : ''}
+            {name && w.date ? ' · ' : ''}
+            {w.date ? `תאריך: ${w.date}` : ''}
+          </span>
+        )}
+        <span className="mt-1.5 block font-medium text-brand">פעולה: {warningAction(w)}</span>
+      </span>
+    </span>
+  );
+}
 
 // ---------------------------------------------------------------------------
 // Modal / drawer

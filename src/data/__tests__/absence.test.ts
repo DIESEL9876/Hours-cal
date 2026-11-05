@@ -174,7 +174,8 @@ describe('summary and export reconciliation', () => {
     expect(s.attendanceTotal.actualWorkedMinutes).toBe(510 + 240);
 
     const csv = tableToCsv(businessMonthTable('סיכום', s, false));
-    for (const h of ['ימים בפועל', 'ימים משולמים', 'שעות בפועל', 'שעות משולמות', 'ימי חופשה', 'ימי מחלה', 'ימי חג', 'ימי בחירות']) expect(csv).toContain(h);
+    for (const h of ['ימים בפועל', 'ימים משולמים', 'שעות בפועל', 'שעות משולמות', 'ימי חופשה', 'ימי מחלה', 'ימי חג']) expect(csv).toContain(h);
+    expect(csv).not.toContain('ימי בחירות'); // removed from the monthly summary (req 1)
     const emp = tableToCsv(employeeMonthTable('דוח', s.rows[0].result));
     expect(emp).toContain('סוג יום');
   });
