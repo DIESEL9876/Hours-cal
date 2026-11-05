@@ -61,21 +61,74 @@ body {
   }
   body {
     background: white;
+    color: #000;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
   }
   .print-full {
     overflow: visible !important;
     height: auto !important;
     max-height: none !important;
+    box-shadow: none !important;
+    border: none !important;
   }
   .print-only {
     display: block !important;
   }
-  table {
-    font-size: 10px;
-  }
   @page {
     size: A4 landscape;
     margin: 10mm;
+  }
+
+  /* A4 report tables (req 13): fit the page width, never clip, repeat headers and totals across pages. */
+  .print-report {
+    width: 100%;
+    direction: rtl;
+  }
+  .print-report + .print-report {
+    margin-top: 6mm;
+  }
+  .print-report h2 {
+    font-size: 12px;
+    font-weight: 700;
+    margin: 0 0 2mm;
+  }
+  table.print-table {
+    width: 100%;
+    table-layout: fixed;
+    border-collapse: collapse;
+    font-size: 8.5px;
+    page-break-inside: auto;
+  }
+  table.print-table thead {
+    display: table-header-group; /* repeat the header on every A4 page */
+  }
+  table.print-table tfoot {
+    display: table-footer-group;
+  }
+  table.print-table tr {
+    page-break-inside: avoid;
+  }
+  table.print-table th,
+  table.print-table td {
+    border: 0.4pt solid #94a3b8;
+    padding: 1.2mm 1mm;
+    text-align: right;
+    overflow-wrap: break-word;
+    word-break: break-word;
+    vertical-align: top;
+  }
+  table.print-table thead th {
+    background: #eef3ff !important;
+    font-weight: 700;
+  }
+  table.print-table tr.print-total td {
+    background: #f1f5f9 !important;
+    font-weight: 700;
+  }
+  table.print-table td.num,
+  table.print-table th.num {
+    font-variant-numeric: tabular-nums;
   }
 }
 .print-only {

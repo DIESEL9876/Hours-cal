@@ -30,7 +30,7 @@ import {
 } from '../../engine';
 import { toDayStatuses, type Business, type DayEntry, type Employee, type ShiftRecord } from '../../data/repo';
 import { Crumbs, useApp } from '../App';
-import { Badge, Button, Checkbox, DECIMAL_HOURS_LABEL, DECIMAL_HOURS_TITLE, DecimalHours, Drawer, Field, IconButton, PageHeader, Select, severityLabel, severityTone, useUi } from '../components';
+import { Badge, Button, Checkbox, DECIMAL_HOURS_LABEL, DECIMAL_HOURS_TITLE, DecimalHours, Drawer, Field, IconButton, PageHeader, Select, severityLabel, severityTone, WarningTip, warningAction, useUi } from '../components';
 import { IconAlert, IconCheck, IconCoins, IconDownload, IconInfo, IconPlus, IconPrinter, IconRedo, IconTrash, IconUndo, IconUpload } from '../icons';
 import { MonthPicker } from '../MonthPicker';
 import { formatDateHe, hm, monthTitle, shekels, STATUS_LABELS, STATUS_OPTIONS } from '../format';
@@ -809,19 +809,21 @@ function ShiftRow({
             </Badge>
           )}
           {errorCount > 0 && (
-            <Badge tone="red" title={warnings.filter((w) => w.severity === 'error').map((w) => w.message).join('\n')}>
-              <IconAlert size={12} /> {errorCount > 1 ? `${errorCount} שגיאות` : (SHORT_ERROR[warnings.find((w) => w.severity === 'error')!.code] ?? 'שגיאה')}
-            </Badge>
+            <WarningTip warning={warnings.find((w) => w.severity === 'error')!}>
+              <Badge tone="red">
+                <IconAlert size={12} /> {errorCount > 1 ? `${errorCount} שגיאות` : (SHORT_ERROR[warnings.find((w) => w.severity === 'error')!.code] ?? 'שגיאה')}
+              </Badge>
+            </WarningTip>
           )}
           {reviewCount > 0 && (
-            <Badge tone="amber" title={warnings.filter((w) => w.severity === 'review').map((w) => w.message).join('\n')}>
-              {reviewCount} לבדיקה
-            </Badge>
+            <WarningTip warning={warnings.find((w) => w.severity === 'review')!}>
+              <Badge tone="amber">{reviewCount} לבדיקה</Badge>
+            </WarningTip>
           )}
           {complianceCount > 0 && (
-            <Badge tone="violet" title={warnings.filter((w) => w.severity === 'compliance').map((w) => w.message).join('\n')}>
-              {complianceCount} ציות
-            </Badge>
+            <WarningTip warning={warnings.find((w) => w.severity === 'compliance')!}>
+              <Badge tone="violet">{complianceCount} ציות</Badge>
+            </WarningTip>
           )}
           {entry?.note && <span className="max-w-[220px] truncate text-[12px] text-ink-soft">{entry.note}</span>}
         </button>,
@@ -1172,9 +1174,12 @@ function DayDrawer({
             <h3 className="mb-2 text-[13px] font-semibold">התראות</h3>
             <ul className="space-y-1.5">
               {warnings.map((w, i) => (
-                <li key={i} className="flex items-start gap-2 rounded-lg bg-slate-50 px-3 py-2 text-[13px]">
-                  <Badge tone={severityTone[w.severity]}>{severityLabel[w.severity]}</Badge>
-                  <span className="leading-snug">{w.message}</span>
+                <li key={i} className="rounded-lg bg-slate-50 px-3 py-2 text-[13px]">
+                  <div className="flex items-start gap-2">
+                    <Badge tone={severityTone[w.severity]}>{severityLabel[w.severity]}</Badge>
+                    <span className="leading-snug">{w.message}</span>
+                  </div>
+                  <div className="mt-1 text-[12px] font-medium text-brand">פעולה: {warningAction(w)}</div>
                 </li>
               ))}
             </ul>
