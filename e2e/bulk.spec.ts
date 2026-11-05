@@ -50,7 +50,7 @@ test('new business from a workbook: proposals, duplicate decision, approval, mon
 
   await expect(page.getByTestId('bulk-done')).toContainText('נוצרו 5 עובדים חדשים');
   await page.getByTestId('bulk-go-summary').click();
-  await expect(page.getByRole('heading', { name: 'סיכום שעות עובדים - אוקטובר 2026' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'סיכום חודשי - אוקטובר 2026' })).toBeVisible();
   await expect(page.getByTestId('summary-row')).toHaveCount(5);
   await expect(page.getByTestId('grand-total')).toBeVisible();
 

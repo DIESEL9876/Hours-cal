@@ -39,6 +39,9 @@ test('full workflow: business → employee → attendance → summary → export
   // --- add employee ---------------------------------------------------------
   await page.getByRole('button', { name: 'הוספת עובד' }).first().click();
   await page.getByTestId('employee-name-input').fill('ישראל ישראלי');
+  // Configure a shortened day (Thursday) — since 1.1.12 none is selected by default (req 7).
+  await page.getByRole('radio', { name: 'הגדרות חישוב' }).click();
+  await page.getByLabel('היום המקוצר').selectOption({ label: 'חמישי' });
   await page.getByTestId('save-employee').click();
   await expect(page.getByTestId('employee-row')).toHaveCount(1);
   await setMonth(page, 2026, 10);
@@ -140,11 +143,11 @@ test('full workflow: business → employee → attendance → summary → export
   // --- business summary -----------------------------------------------------------
   await page.getByRole('button', { name: 'חזרה לעובדים' }).click();
   await page.getByRole('button', { name: 'סיכום חודשי' }).click();
-  await expect(page.getByRole('heading', { name: 'סיכום שעות עובדים - אוקטובר 2026' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'סיכום חודשי - אוקטובר 2026' })).toBeVisible();
   await expect(page.getByTestId('grand-total')).toContainText('25:30');
   // decimal hours under HH:MM, for the employee row and the business total — no extra rows
   await expect(page.getByTestId('summary-row')).toHaveCount(1);
-  await expect(page.getByTestId('decimal-legend')).toContainText('ערך תחתון: שעות עשרוניות');
+  await expect(page.getByTestId('decimal-legend')).toContainText('שעות עשרוניות');
   for (const scope of [page.getByTestId('summary-row'), page.getByTestId('grand-total')]) {
     await expect(scope.getByTestId('dec-regular')).toHaveText('23.00');
     await expect(scope.getByTestId('dec-125')).toHaveText('2.50');

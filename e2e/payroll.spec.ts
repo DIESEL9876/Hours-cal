@@ -62,19 +62,9 @@ test('payroll components, youth, travel, paid-day value and agreements', async (
   await page.getByTestId('agreement-selected').locator('li').filter({ hasText: 'בנייה' }).getByRole('button', { name: 'הסרה' }).click();
   await page.getByTestId('save-employee').click();
 
-  // Button placement: the new button is immediately to the RIGHT of "פתיחת דוח שעות" (RTL), same size class.
-  await setMonth(page, 2026, 11);
-  const row = page.getByTestId('employee-row').first();
-  const open = row.getByRole('button', { name: 'פתיחת דוח שעות' });
-  const pay = row.getByTestId('payroll-items-button');
-  await expect(pay).toHaveText('רכיבי שכר נוספים');
-  const [bo, bp] = [await open.boundingBox(), await pay.boundingBox()];
-  expect(bp!.x).toBeGreaterThan(bo!.x + bo!.width - 1); // to the right
-  expect(bp!.x - (bo!.x + bo!.width)).toBeLessThan(16); // adjacent
-  expect(Math.abs(bp!.height - bo!.height)).toBeLessThan(2);
-
   // Attendance: two shifts on one date = one travel day; youth limit flagged; worked minutes kept.
-  await open.click();
+  await setMonth(page, 2026, 11);
+  await page.getByTestId('employee-row').first().getByRole('button', { name: 'פתיחת דוח שעות' }).click();
   await page.getByLabel('כניסה 2026-11-02').fill('0800');
   await page.getByLabel('יציאה 2026-11-02').fill('1300');
   await page.getByLabel('יציאה 2026-11-02').press('Enter');
@@ -97,9 +87,8 @@ test('payroll components, youth, travel, paid-day value and agreements', async (
   await expect(page.getByTestId('pay-absence')).toHaveText('₪300.00'); // average 7:30 × 40 ₪
   await expect(page.getByTestId('pay-travel')).toHaveText('₪30.00'); // 2 worked dates × 15 ₪
 
-  // Monthly components: entered for November only.
-  await page.getByRole('button', { name: 'חזרה לעובדים' }).click();
-  await page.getByTestId('payroll-items-button').first().click();
+  // Detailed payroll components — now opened from the attendance screen (req 2), kept per month.
+  await page.getByTestId('payroll-items-button').click();
   await expect(page.getByTestId('payroll-items-title')).toContainText('רכיבי שכר נוספים — נועה הצעירה — נובמבר 2026');
   await expect(page.getByTestId('paid-day-value')).toContainText('ממוצע שעות עבודה בחודש הנוכחי');
   await expect(page.getByTestId('paid-day-value')).toContainText('7:30');
@@ -119,32 +108,35 @@ test('payroll components, youth, travel, paid-day value and agreements', async (
   await expect(page.getByTestId('payroll-totals')).toContainText('הצעות להחזר (לא אושרו): ₪500.00');
   await page.getByTestId('payroll-items-close').click();
 
+  // October (via the attendance month picker) has its own, empty list.
+  await setMonth(page, 2026, 10);
+  await page.getByTestId('payroll-items-button').click();
+  await expect(page.getByTestId('payroll-item-row')).toHaveCount(0);
+  await page.getByTestId('payroll-items-close').click();
+  await setMonth(page, 2026, 11);
+
   // Persisted after reload (own table, not part of the hours data).
   await page.reload();
   await page.getByTestId('business-card').filter({ hasText: 'עסק שכר' }).getByRole('button', { name: 'כניסה לעסק' }).click();
   await setMonth(page, 2026, 11);
-  await page.getByTestId('payroll-items-button').first().click();
+  await page.getByTestId('employee-row').first().getByRole('button', { name: 'פתיחת דוח שעות' }).click();
+  await page.getByTestId('payroll-items-button').click();
   await expect(page.getByTestId('payroll-item-row')).toHaveCount(2);
   await page.getByTestId('payroll-items-close').click();
 
-  // October has its own (empty) list.
-  await setMonth(page, 2026, 10);
-  await page.getByTestId('payroll-items-button').first().click();
-  await expect(page.getByTestId('payroll-item-row')).toHaveCount(0);
-  await page.getByTestId('payroll-items-close').click();
-
-  // Business-wide monthly summary: the new money columns and business totals.
-  await setMonth(page, 2026, 11);
+  // Business-wide monthly summary: the money columns and totals (recuperation is now a כן/לא flag).
+  await page.getByRole('button', { name: 'חזרה לעובדים' }).click();
   await page.getByRole('button', { name: 'סיכום חודשי' }).click();
   const thead = page.getByTestId('summary-table').locator('thead');
-  for (const h of ['בונוס', 'מקדמות', 'נסיעות', 'ערך היעדרויות (הערכה)', 'דמי הבראה', 'מילואים']) await expect(thead).toContainText(h);
-  await expect(page.getByTestId('grand-pay-בונוס')).toHaveText('₪500.00');
-  await expect(page.getByTestId('grand-pay-נסיעות')).toHaveText('₪30.00');
+  for (const h of ['בונוסים', 'מקדמות', 'נסיעות', 'ערך היעדרויות', 'הבראה', 'מילואים']) await expect(thead).toContainText(h);
+  await expect(thead).not.toContainText('תוספות אחרות');
+  await expect(page.getByTestId('grand-pay-bonus')).toHaveText('₪500.00');
+  await expect(page.getByTestId('grand-pay-travel')).toHaveText('₪30.00');
   await expect(page.getByTestId('grand-total')).toContainText('15:00'); // hours unchanged by money
   const csvDl = page.waitForEvent('download');
   await page.getByRole('button', { name: 'CSV' }).click();
   const csv = readFileSync((await (await csvDl).path())!, 'utf8');
-  for (const h of ['בונוס (₪)', 'נסיעות (₪)', 'רכיבי שכר', 'בונוס חג']) expect(csv).toContain(h);
+  for (const h of ['בונוסים (₪)', 'נסיעות (₪)', 'רכיבי שכר', 'בונוס חג']) expect(csv).toContain(h);
   expect(csv).toContain('500.00');
   expect(errors).toEqual([]);
 });

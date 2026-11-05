@@ -108,7 +108,7 @@ test('day types are manual; actual vs. paid totals in the employee report, the b
   await page.getByRole('button', { name: 'חזרה לעובדים' }).click();
   await page.getByRole('button', { name: 'סיכום חודשי' }).click();
   const table = page.getByTestId('summary-table');
-  for (const h of ['ימים בפועל', 'ימים משולמים', 'שעות בפועל', 'שעות משולמות', 'ימי חופשה', 'ימי מחלה', 'ימי חג', 'ימי בחירות', 'שעות רגילות', 'נוספות 125%', 'סה״כ שעות נטו'])
+  for (const h of ['ימים בפועל', 'ימים משולמים', 'שעות בפועל', 'שעות משולמות', 'ימי חופשה', 'ימי מחלה', 'ימי חג', 'שעות רגילות', 'נוספות 125%', 'סה״כ נטו'])
     await expect(table.locator('thead')).toContainText(h);
   const row = page.getByTestId('summary-row');
   const grand = page.getByTestId('grand-total');
@@ -121,14 +121,13 @@ test('day types are manual; actual vs. paid totals in the employee report, the b
   await expect(grand.getByTestId('grand-vacation-days')).toHaveText('1.52');
   await expect(grand.getByTestId('grand-sick-days')).toContainText('2.00');
   await expect(grand.getByTestId('grand-holiday-days')).toHaveText('0.00');
-  await expect(grand.getByTestId('grand-election-days')).toHaveText('0.00');
   await expect(grand.getByTestId('dec-net')).toHaveText('12.50');
 
   const csvDl = page.waitForEvent('download');
   await page.getByRole('button', { name: 'CSV' }).click();
   const csv = readFileSync((await (await csvDl).path())!, 'utf8');
   const [header] = csv.split('\r\n');
-  for (const h of ['ימים בפועל', 'ימים משולמים', 'שעות בפועל', 'שעות משולמות', 'ימי חופשה', 'ימי מחלה', 'ימי חג', 'ימי בחירות']) expect(header).toContain(h);
+  for (const h of ['ימים בפועל', 'ימים משולמים', 'שעות בפועל', 'שעות משולמות', 'ימי חופשה', 'ימי מחלה', 'ימי חג']) expect(header).toContain(h);
   const totalLine = csv.split('\r\n').find((l) => l.startsWith('סה״כ לעסק'))!;
   for (const v of ['29:30', '29.50', '12:30', '12.50', '3.50', '1.52', '2.00']) expect(totalLine).toContain(v);
 

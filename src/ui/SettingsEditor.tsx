@@ -418,8 +418,9 @@ export function SettingsEditor({
           </div>
         </div>
         {s.workweek === 'five' && (
-          <Field label="היום המקוצר (7:36 שעות נטו)" className="mt-3 max-w-xs" hint="לפי צו ההרחבה: יום אחד קבוע בשבוע שבו יום העבודה קצר בשעה (7.6 שעות).">
+          <Field label="היום המקוצר (7:36 שעות נטו)" className="mt-3 max-w-xs" hint="יום קבוע שבו יום העבודה קצר בשעה. ברירת המחדל: לא הוגדר.">
             <Select
+              aria-label="היום המקוצר"
               value={s.shortDay === null ? -1 : s.shortDay}
               onChange={(v) => set({ shortDay: v === -1 ? null : (v as Weekday) })}
               options={[{ value: -1, label: 'לא הוגדר' }, ...s.workDays.map((d) => ({ value: d as number, label: HEBREW_WEEKDAYS[d] }))]}
