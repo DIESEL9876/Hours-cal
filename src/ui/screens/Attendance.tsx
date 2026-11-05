@@ -31,7 +31,7 @@ import {
 import { toDayStatuses, type Business, type DayEntry, type Employee, type ShiftRecord } from '../../data/repo';
 import { Crumbs, useApp } from '../App';
 import { Badge, Button, Checkbox, DECIMAL_HOURS_LABEL, DECIMAL_HOURS_TITLE, DecimalHours, Drawer, Field, IconButton, PageHeader, Select, severityLabel, severityTone, useUi } from '../components';
-import { IconAlert, IconCheck, IconDownload, IconInfo, IconPlus, IconPrinter, IconRedo, IconTrash, IconUndo, IconUpload } from '../icons';
+import { IconAlert, IconCheck, IconCoins, IconDownload, IconInfo, IconPlus, IconPrinter, IconRedo, IconTrash, IconUndo, IconUpload } from '../icons';
 import { MonthPicker } from '../MonthPicker';
 import { formatDateHe, hm, monthTitle, shekels, STATUS_LABELS, STATUS_OPTIONS } from '../format';
 import { buildTimestamps, normalizeTimeInput, parseBreakInput } from '../timeEntry';
@@ -42,6 +42,7 @@ import { monthFinancials, resolveTravel, shekelsText, type MonthFinancials } fro
 import { resolveAgreements } from '../../agreements';
 import { COPYRIGHT } from '../../licensing/CopyrightFooter';
 import { AttendanceImportDialog } from './AttendanceImport';
+import { PayrollItemsDialog } from './PayrollItems';
 import { ACCEPT as IMPORT_ACCEPT } from '../../import';
 
 type Op =
@@ -78,6 +79,7 @@ export function AttendanceScreen({ businessId, employeeId }: { businessId: strin
   const [undo, setUndo] = useState<Op[]>([]);
   const [redo, setRedo] = useState<Op[]>([]);
   const [importFile, setImportFile] = useState<File | null>(null);
+  const [showPayroll, setShowPayroll] = useState(false);
   /** 1.1.9: date of birth, monthly paid-day value, verified agreement hours; monthly payroll components. */
   const [extra, setExtra] = useState<Awaited<ReturnType<typeof extraEmployeeInput>> | null>(null);
   const [payItems, setPayItems] = useState<MonthlyAdjustment[]>([]);
@@ -361,6 +363,9 @@ export function AttendanceScreen({ businessId, employeeId }: { businessId: strin
                 אישור {unconfirmed.length} הפסקות משוערות
               </Button>
             )}
+            <Button icon={<IconCoins size={16} />} onClick={() => setShowPayroll(true)} data-testid="payroll-items-button">
+              רכיבי שכר
+            </Button>
             <Button icon={<IconDownload size={16} />} onClick={() => exportEmployeeMonth('xlsx', business, employee, result, ym, financials ? { f: financials, items: payItems } : null).then((m) => m && ui.toast(m)).catch((e) => ui.toast(String(e), 'error'))}>
               Excel
             </Button>
@@ -522,6 +527,7 @@ export function AttendanceScreen({ businessId, employeeId }: { businessId: strin
           }}
         />
       )}
+      {showPayroll && <PayrollItemsDialog business={business} employee={employee} ym={ym} onClose={() => setShowPayroll(false)} onChanged={() => load().catch(() => undefined)} />}
     </div>
   );
 }

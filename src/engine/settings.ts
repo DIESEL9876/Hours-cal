@@ -72,7 +72,7 @@ export function defaultEmployeeSettings(overrides: Partial<EmployeeSettings> = {
   return {
     workweek,
     workDays: workweek === 'five' ? [...FIVE_DAY_WORKDAYS] : [...SIX_DAY_WORKDAYS],
-    shortDay: workweek === 'five' ? 4 : null,
+    shortDay: null, // 1.1.12 (req 7): "לא הוגדר" by default — never auto-select a shortened day
     workType: 'non_manual',
     legalProfile: 'general_private',
     customProfile: null,

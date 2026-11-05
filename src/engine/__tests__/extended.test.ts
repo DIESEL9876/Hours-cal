@@ -387,9 +387,9 @@ describe('break eligibility and legal checks', () => {
     expect(codes).toContain('WEEKLY_OT_LIMIT');
     expect(codes).toContain('WEEKLY_TOTAL_LIMIT');
   });
-  it('short rest between shifts is warned (office threshold)', () => {
+  it('no optional "short rest between shifts" office warning (removed in 1.1.12, req 11)', () => {
     const r = run({ breakMethod: 'none' }, [sh(MON, '14:00', '23:00'), sh(TUE, '05:00', '12:00')], SUN, SAT);
-    expect(day(r, TUE).warnings.some((w) => w.code === 'SHORT_REST_BETWEEN_SHIFTS')).toBe(true);
+    expect(day(r, TUE).warnings.some((w) => w.code === 'SHORT_REST_BETWEEN_SHIFTS')).toBe(false);
   });
 });
 

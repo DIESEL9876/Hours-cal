@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ageOn,
-  BEGINNING_OF_TIME,
   businessFridayHistory,
   businessFridayOn,
   businessWeeklyCreditHistory,
@@ -18,13 +17,18 @@ import type { AuditEntry, Business, Employee } from '../../data/repo';
 import { computeBusinessMonth } from '../../data/service';
 import { Crumbs, useApp } from '../App';
 import { Badge, Button, Card, EmptyState, Field, Modal, PageHeader, Segmented, useUi } from '../components';
-import { IconCalendar, IconChart, IconClock, IconCoins, IconEdit, IconHistory, IconPlus, IconSearch, IconUpload, IconUsers } from '../icons';
+import { IconCalendar, IconChart, IconClock, IconEdit, IconHistory, IconPlus, IconSearch, IconUpload, IconUsers } from '../icons';
 import { BULK_ACCEPT, BulkImportWizard } from './BulkImport';
-import { PayrollItemsDialog } from './PayrollItems';
 import { MonthPicker } from '../MonthPicker';
 import { SettingsEditor } from '../SettingsEditor';
 import { YouthDetails } from '../YouthDetails';
-import { formatDateHe, formatTimestamp, hm, monthTitle, scheduleLabel, weekdayName } from '../format';
+import { formatDateHe, formatTimestamp, hm, monthTitle, scheduleLabel } from '../format';
+
+/** 'YYYY-MM' → next month's 'YYYY-MM'. */
+function nextMonth(ym: string): string {
+  const [y, m] = ym.split('-').map(Number);
+  return m === 12 ? `${y + 1}-01` : `${y}-${String(m + 1).padStart(2, '0')}`;
+}
 
 interface Row {
   employee: Employee;
@@ -47,7 +51,6 @@ export function EmployeesScreen({ businessId }: { businessId: string }) {
   const [showAudit, setShowAudit] = useState(false);
   const [showArchived, setShowArchived] = useState(false);
   const [bulkFile, setBulkFile] = useState<File | null>(null);
-  const [adjusting, setAdjusting] = useState<Employee | null>(null);
   const bulkInput = useRef<HTMLInputElement>(null);
 
   const load = useCallback(async () => {
@@ -171,8 +174,6 @@ export function EmployeesScreen({ businessId }: { businessId: string }) {
                 <tr className="border-b border-line bg-slate-50/70 text-right text-[12px] font-medium text-ink-soft">
                   <th className="px-4 py-2.5 font-medium">שם העובד</th>
                   <th className="px-3 py-2.5 font-medium">מספר עובד</th>
-                  <th className="px-3 py-2.5 font-medium">מתכונת</th>
-                  <th className="px-3 py-2.5 font-medium">יום מקוצר</th>
                   <th className="px-3 py-2.5 font-medium">התקדמות הזנה</th>
                   <th className="px-3 py-2.5 font-medium">שעות נטו בחודש</th>
                   <th className="px-3 py-2.5 font-medium">עודכן לאחרונה</th>
@@ -195,8 +196,6 @@ export function EmployeesScreen({ businessId }: { businessId: string }) {
                         )}
                       </td>
                       <td className="num px-3 py-3 text-right text-ink-soft">{r.employee.employeeNumber ?? '–'}</td>
-                      <td className="px-3 py-3">{r.settings ? scheduleLabel(r.settings) : '–'}</td>
-                      <td className="px-3 py-3">{r.settings?.workweek === 'five' ? weekdayName(r.settings.shortDay) : '–'}</td>
                       <td className="px-3 py-3">
                         <div className="flex items-center gap-2">
                           <div className="h-1.5 w-24 overflow-hidden rounded-full bg-slate-100">
@@ -212,9 +211,6 @@ export function EmployeesScreen({ businessId }: { businessId: string }) {
                       <td className="px-3 py-3 text-[13px] text-ink-soft">{formatTimestamp(r.employee.updatedAt)}</td>
                       <td className="px-4 py-3">
                         <div className="flex justify-end gap-1.5">
-                          <Button size="sm" icon={<IconCoins size={15} />} onClick={() => setAdjusting(r.employee)} data-testid="payroll-items-button">
-                            רכיבי שכר נוספים
-                          </Button>
                           <Button size="sm" variant="primary" icon={<IconClock size={15} />} onClick={() => go({ name: 'attendance', businessId, employeeId: r.employee.id })}>
                             פתיחת דוח שעות
                           </Button>
@@ -228,7 +224,7 @@ export function EmployeesScreen({ businessId }: { businessId: string }) {
                 })}
                 {filtered.length === 0 && employees && employees.length > 0 && (
                   <tr>
-                    <td colSpan={8} className="px-4 py-10 text-center text-ink-soft">
+                    <td colSpan={6} className="px-4 py-10 text-center text-ink-soft">
                       לא נמצאו עובדים התואמים לחיפוש
                     </td>
                   </tr>
@@ -239,7 +235,6 @@ export function EmployeesScreen({ businessId }: { businessId: string }) {
         )}
       </Card>
 
-      {adjusting && <PayrollItemsDialog business={business} employee={adjusting} ym={ym} onClose={() => setAdjusting(null)} onChanged={() => load().catch(() => undefined)} />}
       {bulkFile && (
         <BulkImportWizard
           business={business}
@@ -285,7 +280,6 @@ function EmployeeForm({ business, employee, onClose, onSaved }: { business: Busi
   const [notes, setNotes] = useState(employee?.notes ?? '');
   const [birthDate, setBirthDate] = useState(employee?.birthDate ?? '');
   const [youth, setYouth] = useState<YouthProfile | null>(employee?.youth ?? null);
-  const [versions, setVersions] = useState<SettingsVersion[]>([]);
   // A new employee inherits the business Friday-overtime setting (all other defaults are copied as before).
   const [settings, setSettings] = useState<EmployeeSettings>(() => {
     const { fridayOvertimeHistory: _h, weeklyCreditHistory: _w, absence: _a, travel: _t, agreements: _g, ...copy } = business.defaults;
@@ -294,13 +288,11 @@ function EmployeeForm({ business, employee, onClose, onSaved }: { business: Busi
   });
   const [dirtySettings, setDirtySettings] = useState(false);
   const firstOfMonth = `${ym.year}-${String(ym.month).padStart(2, '0')}-01`;
-  const [effectiveFrom, setEffectiveFrom] = useState(firstOfMonth);
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
     if (!employee) return;
     repo.getSettingsVersions(employee.id).then((vs) => {
-      setVersions(vs);
       const current = resolveSettings(vs, firstOfMonth) ?? vs[vs.length - 1];
       if (current) setSettings(current.settings);
     });
@@ -318,24 +310,13 @@ function EmployeeForm({ business, employee, onClose, onSaved }: { business: Busi
       } else {
         await repo.updateEmployee(business.id, employee.id, { fullName, employeeNumber: number, notes, birthDate: birthDate || null, youth: birthDate ? youth : null });
         if (dirtySettings) {
-          const existing = versions.find((v) => v.effectiveFrom === effectiveFrom);
-          const later = versions.some((v) => v.effectiveFrom > effectiveFrom);
-          let authorize = false;
-          if (existing || later) {
-            authorize = await ui.confirm({
-              title: 'שינוי רטרואקטיבי',
-              message: existing
-                ? `קיימת כבר גרסת הגדרות שתחילתה ${existing.effectiveFrom === BEGINNING_OF_TIME ? 'מתחילת ההעסקה' : formatDateHe(existing.effectiveFrom)}. עדכונה ישנה את חישובי כל החודשים שבתקופתה, כולל חודשים שכבר דווחו. להמשיך?`
-                : 'קיימת גרסת הגדרות מאוחרת יותר. הוספת גרסה לפניה תשנה חישובים קיימים. להמשיך?',
-              confirmLabel: 'כן, לעדכן היסטוריה',
-              danger: true,
-            });
-            if (!authorize) {
-              setBusy(false);
-              return;
-            }
-          }
-          await repo.saveSettingsVersion(business.id, employee.id, effectiveFrom, settings, { authorizeRetroactive: authorize });
+          // Req 6: settings apply from the selected month onward, never inside an already-closed month. Previous
+          // months keep their stored settings; history is kept internally (a new version from this date).
+          const lastFinal = await repo.lastFinalizedMonth(business.id);
+          const floor = lastFinal ? `${nextMonth(lastFinal)}-01` : firstOfMonth;
+          const effectiveFrom = firstOfMonth > floor ? firstOfMonth : floor;
+          await repo.saveSettingsVersion(business.id, employee.id, effectiveFrom, settings, { authorizeRetroactive: true });
+          if (effectiveFrom !== firstOfMonth) ui.toast(`ההגדרות יחולו מ-${formatDateHe(effectiveFrom)} (לאחר החודשים שנסגרו)`, 'info');
         }
         ui.toast('פרטי העובד נשמרו');
       }
@@ -424,32 +405,7 @@ function EmployeeForm({ business, employee, onClose, onSaved }: { business: Busi
       ) : (
         <div>
           {employee && (
-            <div className="mb-5 rounded-xl border border-line bg-slate-50/60 p-4">
-              <div className="mb-2 text-[13px] font-medium">היסטוריית הגדרות</div>
-              <div className="flex flex-wrap gap-2">
-                {versions.map((v) => (
-                  <button
-                    key={v.id}
-                    onClick={() => {
-                      setSettings(v.settings);
-                      setEffectiveFrom(v.effectiveFrom);
-                      setDirtySettings(false);
-                    }}
-                    className={`rounded-lg border px-3 py-1.5 text-[12px] ${effectiveFrom === v.effectiveFrom ? 'border-brand bg-white text-brand' : 'border-line bg-white text-ink-soft'}`}
-                  >
-                    {v.effectiveFrom === BEGINNING_OF_TIME ? 'מתחילת ההעסקה' : `החל מ-${formatDateHe(v.effectiveFrom)}`} · {scheduleLabel(v.settings)}
-                  </button>
-                ))}
-              </div>
-              <Field label="השינויים יחולו החל מתאריך" className="mt-3 max-w-xs" hint="ברירת המחדל: תחילת החודש הנבחר. חודשים קודמים לא ישתנו.">
-                <input
-                  type="date"
-                  className="field-input num"
-                  value={effectiveFrom === BEGINNING_OF_TIME ? '' : effectiveFrom}
-                  onChange={(e) => e.target.value && setEffectiveFrom(e.target.value)}
-                />
-              </Field>
-            </div>
+            <p className="mb-4 text-[12px] text-ink-soft">שינוי הגדרות חל מ{monthTitle(ym.year, ym.month)} ואילך. חודשים קודמים וחודשים שנסגרו אינם משתנים.</p>
           )}
           <SettingsEditor
             businessFriday={businessFridayOn(businessFridayHistory(business.defaults), '9999-12-31')}

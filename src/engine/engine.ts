@@ -780,27 +780,8 @@ export function calculateEmployeePeriod(input: EmployeePeriodInput, opts: { skip
     weeks.push(week);
   }
 
-  // Rest between consecutive shifts on different workdays.
-  for (let i = 1; i < timed.length; i++) {
-    const prev = timed[i - 1];
-    const cur = timed[i];
-    if (!prev.result.valid || !cur.result.valid || prev.result.workDate === cur.result.workDate) continue;
-    const dw = dayWork.get(cur.result.workDate);
-    if (!dw?.version) continue;
-    const gap = (cur.startMs! - prev.endMs!) / MINUTE_MS;
-    const limit = dw.version.settings.restBetweenShiftsWarnMinutes;
-    if (gap >= 0 && limit > 0 && gap < limit) {
-      const w: Warning = {
-        code: 'SHORT_REST_BETWEEN_SHIFTS',
-        severity: 'compliance',
-        message: `מנוחה של ${formatHM(gap)} בלבד מאז המשמרת הקודמת (סף אזהרה משרדי: ${formatHM(limit)})`,
-        date: cur.result.workDate,
-        shiftId: cur.result.shiftId,
-      };
-      cur.result.warnings.push(w);
-      dw.result.warnings.push(w);
-    }
-  }
+  // (1.1.12, req 11) The optional office "rest between shifts" warning was removed. It was a configurable,
+  // non-statutory office threshold, not a verified legal check; the setting and its warning no longer exist.
 
   // Youth Employment Law checks per attendance date. Warnings only — worked minutes and pay are never changed.
   const youthOutcomes = new Map<LocalDate, YouthDayOutcome>();
@@ -947,7 +928,9 @@ export function calculateEmployeePeriod(input: EmployeePeriodInput, opts: { skip
       if (s.legalProfile === 'custom_contract')
         warn(periodWarnings, 'CUSTOM_PROFILE', 'review', 'החישוב מבוסס על תקנים הסכמיים שהוזנו ידנית – יש לוודא שהם תואמים את ההסכם', from);
       if (s.workweek === 'five' && s.shortDay === null && s.legalProfile === 'general_private')
-        warn(periodWarnings, 'NO_SHORT_DAY', 'review', 'לא הוגדר יום מקוצר לעובד בשבוע של 5 ימים – לפי צו ההרחבה יש לקבוע יום קבוע של 7.6 שעות', from);
+        // Info only (1.1.12): no shortened day is a valid deliberate default; without one a five-day week is 43h and
+        // the extra hour is counted as weekly overtime. Not a blocking review.
+        warn(periodWarnings, 'NO_SHORT_DAY', 'info', 'לא הוגדר יום מקוצר (שבוע של 5 ימים). ללא יום מקוצר השבוע הוא 43 שעות והשעה העודפת נספרת כשעה נוספת שבועית. לקביעת יום מקוצר: הגדרות חישוב ← מתכונת עבודה', from);
     }
   }
 

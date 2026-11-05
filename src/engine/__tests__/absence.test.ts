@@ -64,7 +64,7 @@ describe('actual vs. paid days and hours', () => {
 
 describe('vacation', () => {
   it('full day uses the employee schedule (shortened day 7:36, six-day 8:00, part-time contract)', () => {
-    expect(att(calc(emp(), [], [st('2026-11-05', 'vacation')]), '2026-11-05').paidAbsenceNominalMinutes).toBe(H(7, 36));
+    expect(att(calc(emp({}, { shortDay: 4 }), [], [st('2026-11-05', 'vacation')]), '2026-11-05').paidAbsenceNominalMinutes).toBe(H(7, 36));
     expect(att(calc(emp({}, { workweek: 'six', workDays: [0, 1, 2, 3, 4, 5], shortDay: null }), [], [st('2026-11-02', 'vacation')]), '2026-11-02').paidAbsenceNominalMinutes).toBe(H(8));
     expect(att(calc(emp({}, { contractDailyMinutes: H(5) }), [], [st('2026-11-02', 'vacation')]), '2026-11-02').paidAbsenceNominalMinutes).toBe(H(5));
   });

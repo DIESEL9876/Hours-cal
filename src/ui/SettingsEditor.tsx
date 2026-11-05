@@ -331,7 +331,8 @@ export function SettingsEditor({
   const p = s.companyBreakPolicy;
 
   const setWorkweek = (w: 'five' | 'six') =>
-    set({ workweek: w, workDays: w === 'five' ? [...FIVE_DAY_WORKDAYS] : [...SIX_DAY_WORKDAYS], shortDay: w === 'five' ? (s.shortDay ?? 4) : null });
+    // Req 7: never auto-select a shortened day — keep an explicit choice, otherwise leave it "לא הוגדר".
+    set({ workweek: w, workDays: w === 'five' ? [...FIVE_DAY_WORKDAYS] : [...SIX_DAY_WORKDAYS], shortDay: w === 'five' ? s.shortDay : null });
 
   const toggleDay = (d: Weekday) => {
     const days = s.workDays.includes(d) ? s.workDays.filter((x) => x !== d) : [...s.workDays, d].sort();
@@ -452,25 +453,12 @@ export function SettingsEditor({
             {scope === 'business' && ' ברירת מחדל לעובדים המוגדרים "לפי הגדרת העסק"; שינוי חל מהחודש שאחרי החודש האחרון שנסגר סופית.'}
           </span>
         </div>
-        <div className="mt-3 grid grid-cols-2 gap-3">
-          <Field label="סוג עבודה" hint="משפיע על בדיקת ההפסקה המינימלית לעובדי כפיים">
+        <div className="mt-3 max-w-sm">
+          <Field label="סוג עבודה" hint="משפיע על ההפסקה המינימלית לעובדי כפיים">
             <Select value={s.workType} onChange={(v) => set({ workType: v })} options={[{ value: 'non_manual', label: 'עבודה שאינה עבודת כפיים' }, { value: 'manual', label: 'עבודת כפיים / פיזית' }]} />
           </Field>
-          <Field label="היקף משרה יומי חוזי (אופציונלי)" hint="למשרה חלקית: שעות מעבר לכך ועד התקן יוצגו כ'שעות עודפות 100%'">
-            <input
-              className="field-input num text-left"
-              placeholder="ש:דד"
-              defaultValue={s.contractDailyMinutes === null ? '' : `${Math.floor(s.contractDailyMinutes / 60)}:${String(s.contractDailyMinutes % 60).padStart(2, '0')}`}
-              onChange={(e) => {
-                const t = e.target.value.trim();
-                if (!t) return set({ contractDailyMinutes: null });
-                const m = /^(\d{1,2}):(\d{2})$/.exec(t);
-                if (m && +m[2] < 60 && +m[1] * 60 + +m[2] > 0) set({ contractDailyMinutes: +m[1] * 60 + +m[2] });
-              }}
-            />
-          </Field>
         </div>
-        <Checkbox checked={s.nightRulesEnabled} onChange={(v) => set({ nightRulesEnabled: v })} label="להחיל כללי משמרת לילה (תקן 7 שעות כששעתיים לפחות בין 22:00 ל-06:00)" />
+        <Checkbox checked={s.nightRulesEnabled} onChange={(v) => set({ nightRulesEnabled: v })} label="כללי משמרת לילה (תקן 7 שעות כששעתיים לפחות בין 22:00 ל-06:00)" />
       </Section>
 
       <Section title="מנוחה שבועית וחגים" note="חלון המנוחה לעובד יהודי מחושב משקיעת החמה ביום שישי ועד צאת הכוכבים במוצאי שבת, לפי העיר שנבחרה.">
@@ -497,24 +485,6 @@ export function SettingsEditor({
           <Field label="עיר לחישוב זמני כניסה/יציאה">
             <Select value={s.location} onChange={(v) => set({ location: v })} options={ISRAELI_CITIES} />
           </Field>
-          <Field label="הרחבת החלון לפני תחילתו (דקות)">
-            <input
-              type="number"
-              min={0}
-              className="field-input num text-left"
-              value={s.weeklyRest.startOffsetMinutes}
-              onChange={(e) => set({ weeklyRest: { ...s.weeklyRest, startOffsetMinutes: Math.max(0, Math.floor(+e.target.value || 0)) } })}
-            />
-          </Field>
-          <Field label="הרחבת החלון אחרי סיומו (דקות)">
-            <input
-              type="number"
-              min={0}
-              className="field-input num text-left"
-              value={s.weeklyRest.endOffsetMinutes}
-              onChange={(e) => set({ weeklyRest: { ...s.weeklyRest, endOffsetMinutes: Math.max(0, Math.floor(+e.target.value || 0)) } })}
-            />
-          </Field>
         </div>
         <Field label="לוח חגים" className="mt-3">
           <Select
@@ -537,18 +507,19 @@ export function SettingsEditor({
           />
         </Field>
         {s.breakMethod === 'company_auto' && (
+          // Req 10: two pairs, each minimum-shift threshold next to its break duration (RTL).
           <div className="mt-3 grid grid-cols-4 gap-3 rounded-xl border border-line bg-slate-50/60 p-4">
-            <Field label="סף משמרת (ש:דד)" hint="עד וכולל הסף – הפסקה קצרה">
-              <MinutesInput value={p.thresholdMinutes} onChange={(v) => set({ companyBreakPolicy: { ...p, thresholdMinutes: v } })} />
+            <Field label="משמרת מינימלית להפסקה קצרה (ש:דד)" hint="משמרת קצרה יותר – ללא ניכוי">
+              <MinutesInput value={p.minShiftMinutes} onChange={(v) => set({ companyBreakPolicy: { ...p, minShiftMinutes: v } })} />
             </Field>
             <Field label="הפסקה קצרה (דקות)">
               <input type="number" min={0} className="field-input num text-left" value={p.shortBreakMinutes} onChange={(e) => set({ companyBreakPolicy: { ...p, shortBreakMinutes: Math.max(0, Math.floor(+e.target.value || 0)) } })} />
             </Field>
-            <Field label="הפסקה ארוכה (דקות)" hint="מעל הסף">
-              <input type="number" min={0} className="field-input num text-left" value={p.longBreakMinutes} onChange={(e) => set({ companyBreakPolicy: { ...p, longBreakMinutes: Math.max(0, Math.floor(+e.target.value || 0)) } })} />
+            <Field label="משמרת מינימלית להפסקה ארוכה (ש:דד)">
+              <MinutesInput value={p.thresholdMinutes} onChange={(v) => set({ companyBreakPolicy: { ...p, thresholdMinutes: v } })} />
             </Field>
-            <Field label="משמרת מינימלית להפעלה (ש:דד)" hint="משמרת קצרה יותר – ללא ניכוי">
-              <MinutesInput value={p.minShiftMinutes} onChange={(v) => set({ companyBreakPolicy: { ...p, minShiftMinutes: v } })} />
+            <Field label="הפסקה ארוכה (דקות)">
+              <input type="number" min={0} className="field-input num text-left" value={p.longBreakMinutes} onChange={(e) => set({ companyBreakPolicy: { ...p, longBreakMinutes: Math.max(0, Math.floor(+e.target.value || 0)) } })} />
             </Field>
           </div>
         )}
@@ -570,15 +541,6 @@ export function SettingsEditor({
             />
           </Field>
           <TravelField value={s.travel} onChange={(travel) => set({ travel })} scope={scope} business={businessTravel} />
-          <Field label="סף אזהרה למנוחה בין משמרות (שעות)" hint="אזהרה משרדית – לא כלל חוקי כללי שאומת">
-            <input
-              type="number"
-              min={0}
-              className="field-input num text-left"
-              value={s.restBetweenShiftsWarnMinutes / 60}
-              onChange={(e) => set({ restBetweenShiftsWarnMinutes: Math.max(0, Math.round((+e.target.value || 0) * 60)) })}
-            />
-          </Field>
           <Field label="דירוג שעות נוספות שבועיות">
             <Select
               value={s.weeklyOvertimeTiering}

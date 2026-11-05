@@ -154,7 +154,11 @@ describe('summary and export reconciliation', () => {
   it('business totals = sum of employees = sum of days; CSV carries the new columns', async () => {
     const repo = await open();
     const { b, e } = await setup(repo);
-    const e2 = await repo.createEmployee(b.id, { fullName: 'אבי', settings: { ...(await repo.getSettingsVersions(e.id))[0].settings } });
+    // This test exercises the shortened-Thursday sick-pay path, so give this employee an explicit shortened day
+    // (since 1.1.12 no shortened day is auto-selected).
+    const base = (await repo.getSettingsVersions(e.id))[0].settings;
+    await repo.saveSettingsVersion(b.id, e.id, '1900-01-01', { ...base, shortDay: 4 }, { authorizeRetroactive: true });
+    const e2 = await repo.createEmployee(b.id, { fullName: 'אבי', settings: { ...base } });
     await repo.upsertShift(b.id, e.id, shift('2026-10-12', '08:00', '17:00', 30));
     await repo.setDayEntry(b.id, e.id, { date: '2026-10-13', status: 'vacation', note: null });
     await repo.setDayEntry(b.id, e.id, { date: '2026-10-14', status: 'sick', note: null });

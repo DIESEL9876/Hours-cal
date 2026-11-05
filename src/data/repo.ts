@@ -1037,6 +1037,12 @@ export class Repository {
   }
 
   // ---------------------------------------------------------------- month reviews
+  /** The latest finalized month (YYYY-MM) for the business, or null. Used to keep settings changes out of closed months. */
+  async lastFinalizedMonth(businessId: string): Promise<string | null> {
+    const rows = await this.driver.select(`SELECT MAX(year_month) AS m FROM month_reviews WHERE business_id = ? AND status = 'final'`, [businessId]);
+    return (rows[0]?.m as string) ?? null;
+  }
+
   async getMonthReview(businessId: string, yearMonth: string): Promise<MonthReview> {
     const rows = await this.driver.select(`SELECT * FROM month_reviews WHERE business_id = ? AND year_month = ?`, [businessId, yearMonth]);
     if (!rows.length) return { businessId, yearMonth, status: 'open', finalizedAt: null, snapshotHash: null, snapshotJson: null, note: null, updatedAt: '', rulesJson: null };
