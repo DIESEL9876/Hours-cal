@@ -129,6 +129,38 @@ export function sumAttendance(days: DayAttendance[]): AttendanceTotals {
   return t;
 }
 
+/** Per-category view of the engine's own daily absence figures (1.1.13, reporting only — no new calculation). */
+export interface AbsenceCategoryTotals {
+  dayHundredths: number;
+  /** Scheduled (nominal) hours of the absent portions. */
+  nominalMinutes: number;
+  /** Paid hour-equivalents (nominal × rate) — the part included in payableEquivalentMinutes. */
+  equivalentMinutes: number;
+  /** Paid day-equivalents (absent portion × rate). */
+  paidDayHundredths: number;
+  /** Dates whose entitlement needs a human check. */
+  reviewDays: number;
+}
+
+/**
+ * Groups the per-day attendance by day category. Plain sums of the engine's per-day values, so the categories add
+ * up exactly to the period's AttendanceTotals (e.g. Σ equivalentMinutes = paidAbsenceEquivalentMinutes).
+ */
+export function absenceByCategory(days: DayAttendance[]): Partial<Record<DayStatusKind | 'none', AbsenceCategoryTotals>> {
+  const out: Partial<Record<DayStatusKind | 'none', AbsenceCategoryTotals>> = {};
+  for (const d of days) {
+    if (!d.absenceDayHundredths && !d.paidAbsenceNominalMinutes && !d.paidAbsenceEquivalentMinutes && d.basis !== 'review') continue;
+    const k = d.category ?? 'none';
+    const t = (out[k] ??= { dayHundredths: 0, nominalMinutes: 0, equivalentMinutes: 0, paidDayHundredths: 0, reviewDays: 0 });
+    t.dayHundredths += d.absenceDayHundredths;
+    t.nominalMinutes += d.paidAbsenceNominalMinutes;
+    t.equivalentMinutes += d.paidAbsenceEquivalentMinutes;
+    t.paidDayHundredths += d.paidAbsenceDayHundredths;
+    if (d.basis === 'review') t.reviewDays++;
+  }
+  return out;
+}
+
 export const roundHalfUp = (x: number) => Math.floor(x + 0.5);
 
 /** "1.25" style display of hundredths of a day. */

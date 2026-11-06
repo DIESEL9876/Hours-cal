@@ -6,7 +6,8 @@ import type { Business, Employee } from '../data/repo';
 import { isTauri } from '../data/tauriDriver';
 import { monthTitle } from '../ui/format';
 import { COPYRIGHT } from '../licensing/CopyrightFooter';
-import { businessDetailTable, businessMonthTable, employeeMonthTable, payrollItemsTable, youthTable, type Cell, type Table } from './tables';
+import { businessDetailTable, businessMonthTable, employeeMonthTable, payrollEntryTable, payrollItemsTable, youthTable, type Cell, type Table } from './tables';
+import { buildPayrollEntryReport } from './payrollEntry';
 import type { MonthlyAdjustment } from '../data/repo';
 import type { MonthFinancials } from '../payroll/financials';
 
@@ -22,6 +23,8 @@ function csvCell(c: Cell): string {
       return c.v;
     case 'dur':
       return formatHM(c.v);
+    case 'dec':
+      return formatDecimalHours(c.v);
     case 'int':
       return String(c.v);
     case 'days':
@@ -35,7 +38,7 @@ const q = (s: string) => (/[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s)
 
 /** UTF-8 CSV with BOM (opens correctly in Hebrew Excel). Durations as H:MM plus decimal-hour columns. */
 export function tableToCsv(t: Table): string {
-  const durCols = t.headers.map((_, i) => t.rows.some((r) => r[i]?.kind === 'dur')).map((isDur, i) => (isDur ? i : -1)).filter((i) => i >= 0);
+  const durCols = t.headers.map((_, i) => !t.ownDecimals && t.rows.some((r) => r[i]?.kind === 'dur')).map((isDur, i) => (isDur ? i : -1)).filter((i) => i >= 0);
   const headers = [...t.headers, ...durCols.map((i) => `${t.headers[i]} (עשרוני)`)];
   const lines = [headers.map(q).join(',')];
   for (const r of t.rows) {
@@ -60,7 +63,7 @@ async function tablesToXlsx(tables: Table[], meta: { title: string; subtitle: st
     ws.getCell('A1').font = { bold: true, size: 14 };
     ws.getCell('A2').value = meta.subtitle;
     ws.getCell('A2').font = { size: 10, color: { argb: 'FF475569' } };
-    const durCols = t.headers.map((_, i) => t.rows.some((r) => r[i]?.kind === 'dur'));
+    const durCols = t.headers.map((_, i) => !t.ownDecimals && t.rows.some((r) => r[i]?.kind === 'dur'));
     const headers = [...t.headers, ...t.headers.filter((_, i) => durCols[i]).map((h) => `${h} (עשרוני)`)];
     const headerRow = ws.getRow(4);
     headers.forEach((h, i) => {
@@ -82,10 +85,17 @@ async function tablesToXlsx(tables: Table[], meta: { title: string; subtitle: st
           c.value = cell.v / 1440;
           c.numFmt = '[h]:mm';
           c.alignment = { horizontal: 'center' };
-          const d = row.getCell(++extra);
-          d.value = decimalHundredths(cell.v) / 100; // same conversion as the screens
-          d.numFmt = '0.00';
-          d.alignment = { horizontal: 'center' };
+          if (!t.ownDecimals) {
+            const d = row.getCell(++extra);
+            d.value = decimalHundredths(cell.v) / 100; // same conversion as the screens
+            d.numFmt = '0.00';
+            d.alignment = { horizontal: 'center' };
+          }
+        } else if (cell.kind === 'dec') {
+          c.value = decimalHundredths(cell.v) / 100; // total minutes / 60, rounded once (2 decimals)
+          c.numFmt = '0.00';
+          c.alignment = { horizontal: 'center' };
+          c.font = { bold: true };
         } else if (cell.kind === 'int') {
           c.value = cell.v;
           c.alignment = { horizontal: 'center' };
@@ -196,7 +206,11 @@ export async function exportBusinessMonth(
 ): Promise<string | null> {
   const title = `סיכום שעות עובדים - ${monthTitle(ym.year, ym.month)} - ${business.name}`;
   const includePay = summary.rows.some((r) => r.totals.payAgorot !== null);
-  const tables = [businessMonthTable('סיכום', summary, includePay, fin), businessDetailTable('פירוט יומי', summary)];
+  const tables: Table[] = [
+    businessMonthTable('סיכום', summary, includePay, fin),
+    { ...payrollEntryTable('קליטת שכר', buildPayrollEntryReport(summary, fin)), csvAppend: true },
+    businessDetailTable('פירוט יומי', summary),
+  ];
   if (fin) {
     const pay = payrollItemsTable(
       'רכיבי שכר',

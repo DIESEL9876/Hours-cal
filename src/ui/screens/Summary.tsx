@@ -11,6 +11,8 @@ import { formatDateHe, formatTimestamp, hm, monthTitle, shekels } from '../forma
 import { exportBusinessMonth } from '../../export/exporters';
 import { COPYRIGHT } from '../../licensing/CopyrightFooter';
 import { issuesText } from '../../export/tables';
+import { buildPayrollEntryReport } from '../../export/payrollEntry';
+import { PayrollEntryPrint } from '../PayrollEntryPrint';
 
 type SortKey = 'name' | 'regular' | 'ot125' | 'ot150' | 'premium' | 'net' | 'aDays' | 'pDays' | 'aHours' | 'pHours' | 'vac' | 'sick' | 'hol';
 
@@ -132,7 +134,9 @@ export function SummaryScreen({ businessId }: { businessId: string }) {
       });
   }, [summary, query, sort]);
 
-  if (!business || !summary || !review) return null;
+  const payrollEntry = useMemo(() => (summary ? buildPayrollEntryReport(summary, fin) : null), [summary, fin]);
+
+  if (!business || !summary || !review || !payrollEntry) return null;
   const g = summary.grandTotal;
   const gp = premiumMinutes(g.buckets);
   const at = summary.attendanceTotal;
@@ -247,15 +251,6 @@ export function SummaryScreen({ businessId }: { businessId: string }) {
           </>
         }
       />
-      <div className="print-only mb-3">
-        <div className="text-[18px] font-bold">{title}</div>
-        <div className="text-[12px]">
-          {business.name} · {statusLine}
-        </div>
-        <div className="text-[11px]">בכל תא שעות: שורה עליונה ש:דד · שורה תחתונה {DECIMAL_HOURS_LABEL}</div>
-        <div className="text-[10px]">{COPYRIGHT}</div>
-      </div>
-
       {(blocking > 0 || openReview > 0 || g.complianceCount > 0 || absenceReview > 0 || changedSinceFinal) && (
         <div className="no-print mb-4 flex flex-wrap items-center gap-2 rounded-xl bg-amber-50 px-4 py-3 text-[13px] text-amber-900 ring-1 ring-amber-200">
           <IconAlert size={18} />
@@ -279,7 +274,18 @@ export function SummaryScreen({ businessId }: { businessId: string }) {
             <span>מקדמות ובונוסים ב-₪ · הבראה: כן/לא · לחיצה על שורה מציגה פירוט</span>
           </div>
         </div>
-        <PrintReport title={title} rows={summary.rows} g={g} gp={gp} at={at} fin={fin} includePay={includePay} count={summary.rows.length} />
+        <PayrollEntryPrint
+          report={payrollEntry}
+          businessName={business.name}
+          period={monthTitle(ym.year, ym.month)}
+          monthState={
+            review.status === 'final'
+              ? { final: !changedSinceFinal, text: changedSinceFinal ? 'החודש נסגר – הנתונים השתנו מאז הסגירה, יש לבדוק' : `סופי – החודש נסגר${review.finalizedAt ? ` ${formatTimestamp(review.finalizedAt).slice(0, 10)}` : ''}` }
+              : { final: false, text: `טיוטה – ${REVIEW_LABEL[review.status]}; הנתונים עשויים להשתנות` }
+          }
+          generatedAt={formatTimestamp(new Date().toISOString())}
+          footer={`מסמך עזר לקליטת שכר – אינו תלוש שכר. הנתונים מחושבים במערכת לפי הגדרות העובד לחודש זה. ${COPYRIGHT}`}
+        />
         <div className="overflow-x-auto no-print">
           <table className="w-full min-w-max text-[14px]" data-testid="summary-table">
             <thead>
@@ -378,7 +384,7 @@ export function SummaryScreen({ businessId }: { businessId: string }) {
             </tbody>
           </table>
         </div>
-        <p className="px-4 py-2 text-[12px] text-ink-soft print:px-0">סכומי ₪ הם להכנת שכר בלבד – אינם תלוש שכר. הערכת העלות מבוססת על שכר שעתי ושיעורי הגמול בלבד (ללא מס, ביטוח לאומי ופנסיה).</p>
+        <p className="no-print px-4 py-2 text-[12px] text-ink-soft">סכומי ₪ הם להכנת שכר בלבד – אינם תלוש שכר. הערכת העלות מבוססת על שכר שעתי ושיעורי הגמול בלבד (ללא מס, ביטוח לאומי ופנסיה).</p>
       </Card>
 
       <Card className="no-print mt-5 p-5">
@@ -645,146 +651,6 @@ function DecimalTriple({ a, b, c }: { a: number; b: number; c: number }) {
   return (
     <div className="num mt-0.5 text-right text-[11px] font-normal leading-tight text-slate-500" title={DECIMAL_HOURS_TITLE} data-testid="dec-premium">
       {formatDecimalHours(a)} · {formatDecimalHours(b)} · {formatDecimalHours(c)}
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// A4 print layout (req 13): two narrow tables that each fit A4 landscape, so no
-// column is clipped and headers/totals repeat across pages.
-// ---------------------------------------------------------------------------
-
-type Fin = Awaited<ReturnType<typeof computeBusinessFinancials>> | null;
-
-function PrintReport({
-  title,
-  rows,
-  g,
-  gp,
-  at,
-  fin,
-  includePay,
-  count,
-}: {
-  title: string;
-  rows: BusinessSummaryRow[];
-  g: PeriodTotals;
-  gp: ReturnType<typeof premiumMinutes>;
-  at: AttendanceTotals;
-  fin: Fin;
-  includePay: boolean;
-  count: number;
-}) {
-  const D = (v: number) => formatDays(v);
-  const S = (v: number) => shekelsText(v);
-  const hoursHeaders = ['עובד', 'ימים בפועל', 'ימים משולמים', 'שעות בפועל', 'שעות משולמות', 'רגילות', 'נוספות 125%', 'נוספות 150%', 'מנוחה/חג', 'סה״כ נטו', 'חופשה', 'מחלה', 'חג'];
-  const payHeaders = ['עובד', 'ערך היעדרויות', 'נסיעות', 'מקדמות', 'בונוסים', 'הבראה', 'מילואים', ...(includePay ? ['הערכת עלות'] : [])];
-  const premium = (t: PeriodTotals) => {
-    const p = premiumMinutes(t.buckets);
-    return p.total ? `${hm(p.p150, '0')}·${hm(p.p175, '0')}·${hm(p.p200, '0')}` : '–';
-  };
-  return (
-    <div className="print-only">
-      <div className="print-report">
-        <h2>{title} — שעות וימים</h2>
-        <table className="print-table">
-          <thead>
-            <tr>
-              {hoursHeaders.map((h) => (
-                <th key={h} className={h === 'עובד' ? '' : 'num'}>
-                  {h}
-                </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((r) => {
-              const t = r.totals;
-              const a = r.result.attendance;
-              return (
-                <tr key={r.employeeId}>
-                  <td>{r.name}</td>
-                  <td className="num">{D(a.actualWorkedDays * 100)}</td>
-                  <td className="num">{D(a.paidDayHundredths)}</td>
-                  <td className="num">{hm(a.actualWorkedMinutes, '0:00')}</td>
-                  <td className="num">{hm(a.payableEquivalentMinutes, '0:00')}</td>
-                  <td className="num">{hm(t.buckets.regular, '0:00')}</td>
-                  <td className="num">{hm(t.buckets.ot125, '0:00')}</td>
-                  <td className="num">{hm(t.buckets.ot150, '0:00')}</td>
-                  <td className="num">{premium(t)}</td>
-                  <td className="num">{hm(t.netMinutes, '0:00')}</td>
-                  <td className="num">{D(a.vacationDayHundredths)}</td>
-                  <td className="num">{D(a.sickDayHundredths)}</td>
-                  <td className="num">{D(a.holidayDayHundredths)}</td>
-                </tr>
-              );
-            })}
-          </tbody>
-          <tfoot>
-            <tr className="print-total">
-              <td>סה״כ ({count})</td>
-              <td className="num">{D(at.actualWorkedDays * 100)}</td>
-              <td className="num">{D(at.paidDayHundredths)}</td>
-              <td className="num">{hm(at.actualWorkedMinutes, '0:00')}</td>
-              <td className="num">{hm(at.payableEquivalentMinutes, '0:00')}</td>
-              <td className="num">{hm(g.buckets.regular, '0:00')}</td>
-              <td className="num">{hm(g.buckets.ot125, '0:00')}</td>
-              <td className="num">{hm(g.buckets.ot150, '0:00')}</td>
-              <td className="num">{gp.total ? `${hm(gp.p150, '0')}·${hm(gp.p175, '0')}·${hm(gp.p200, '0')}` : '–'}</td>
-              <td className="num">{hm(g.netMinutes, '0:00')}</td>
-              <td className="num">{D(at.vacationDayHundredths)}</td>
-              <td className="num">{D(at.sickDayHundredths)}</td>
-              <td className="num">{D(at.holidayDayHundredths)}</td>
-            </tr>
-          </tfoot>
-        </table>
-      </div>
-
-      {fin && (
-        <div className="print-report">
-          <h2>רכיבי שכר (₪) — להכנת שכר בלבד</h2>
-          <table className="print-table">
-            <thead>
-              <tr>
-                {payHeaders.map((h) => (
-                  <th key={h} className={h === 'עובד' ? '' : 'num'}>
-                    {h}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((r) => {
-                const f = fin.byEmployee.get(r.employeeId);
-                return (
-                  <tr key={r.employeeId}>
-                    <td>{r.name}</td>
-                    <td className="num">{f && f.absenceEstimateAgorot ? S(f.absenceEstimateAgorot) : '–'}</td>
-                    <td className="num">{f && f.travel.totalAgorot ? S(f.travel.totalAgorot) : '–'}</td>
-                    <td className="num">{f && f.byCategory.advance ? S(f.byCategory.advance) : '–'}</td>
-                    <td className="num">{f && f.byCategory.bonus ? S(f.byCategory.bonus) : '–'}</td>
-                    <td className="num">{f?.recuperationDue ? 'כן' : 'לא'}</td>
-                    <td className="num">{f && f.byCategory.reserve ? S(f.byCategory.reserve) : '–'}</td>
-                    {includePay && <td className="num">{shekels(r.totals.payAgorot)}</td>}
-                  </tr>
-                );
-              })}
-            </tbody>
-            <tfoot>
-              <tr className="print-total">
-                <td>סה״כ</td>
-                <td className="num">{S(fin.totals.absenceEstimateAgorot)}</td>
-                <td className="num">{S(fin.totals.travelAgorot)}</td>
-                <td className="num">{S(fin.totals.byCategory.advance)}</td>
-                <td className="num">{S(fin.totals.byCategory.bonus)}</td>
-                <td className="num">{[...fin.byEmployee.values()].filter((x) => x.recuperationDue).length} כן</td>
-                <td className="num">{S(fin.totals.byCategory.reserve)}</td>
-                {includePay && <td className="num">{shekels(g.payAgorot)}</td>}
-              </tr>
-            </tfoot>
-          </table>
-        </div>
-      )}
     </div>
   );
 }

@@ -16,9 +16,11 @@ import {
 import { formatDateHe, STATUS_LABELS } from '../ui/format';
 import type { MonthlyAdjustment } from '../data/repo';
 import { ADJUSTMENT_LABELS, type MonthFinancials, type sumFinancials } from '../payroll/financials';
+import type { PayrollEntryReport, PeValue } from './payrollEntry';
 
 /** 'days' holds HUNDREDTHS of a day (fractional day counts, summed exactly from the daily records). */
-export type Cell = { kind: 'text'; v: string } | { kind: 'dur'; v: number } | { kind: 'int'; v: number } | { kind: 'days'; v: number } | { kind: 'money'; v: number | null };
+/** 'dec' holds MINUTES rendered as decimal hours only (payroll-entry sheet, 1.1.13). */
+export type Cell = { kind: 'text'; v: string } | { kind: 'dur'; v: number } | { kind: 'dec'; v: number } | { kind: 'int'; v: number } | { kind: 'days'; v: number } | { kind: 'money'; v: number | null };
 
 export interface Table {
   title: string;
@@ -28,6 +30,8 @@ export interface Table {
   totalRow: number | null;
   /** CSV: append this table after the main one (CSV has a single sheet). */
   csvAppend?: boolean;
+  /** Durations already come with their own decimal column ('dec') — do not append "(עשרוני)" columns. */
+  ownDecimals?: boolean;
 }
 
 const T = (v: string): Cell => ({ kind: 'text', v });
@@ -317,4 +321,39 @@ export function youthTable(title: string, rows: { name: string; number: string; 
     }
   }
   return { title, headers, rows: out, totalRow: null };
+}
+
+/**
+ * 1.1.13 — "קליטת שכר" sheet: the same PayrollEntryReport model as the A4 print, so print and exports always agree.
+ * Each hour field is given as decimal hours (for entry) followed by H:MM (for verification).
+ */
+export function payrollEntryTable(title: string, report: PayrollEntryReport): Table {
+  const headers = ['עובד', 'מספר עובד', 'סטטוס'];
+  for (const c of report.columns) {
+    if (c.kind === 'hours') headers.push(`${c.label} (עשרוני)`, `${c.label} (ש:דד)`);
+    else if (c.kind === 'money') headers.push(`${c.label} (₪)`);
+    else headers.push(c.label);
+  }
+  headers.push('פריטים לבדיקה');
+  const cells = (values: Record<string, PeValue>, total: boolean): Cell[] => {
+    const out: Cell[] = [];
+    for (const c of report.columns) {
+      const val = values[c.key];
+      const v = val?.v ?? null;
+      if (v === null) {
+        out.push(T(val?.status === 'missing' ? 'לא הוגדר' : ''));
+        if (c.kind === 'hours') out.push(T(''));
+        continue;
+      }
+      if (c.kind === 'hours') out.push({ kind: 'dec', v }, { kind: 'dur', v });
+      else if (c.kind === 'days') out.push(DY(v));
+      else if (c.kind === 'money') out.push({ kind: 'money', v });
+      else out.push(T(total ? `${v} כן` : v ? 'כן' : 'לא'));
+    }
+    return out;
+  };
+  const rows: Cell[][] = report.rows.map((r) => [T(r.name), T(r.number), T(r.issues.length ? 'לבדיקה' : 'מוכן'), ...cells(r.values, false), T(r.issues.join(' · '))]);
+  const open = report.rows.filter((r) => r.issues.length).length;
+  rows.push([T('סה״כ לעסק'), T(''), T(open ? `${open} לבדיקה` : 'מוכן'), ...cells(report.totals, true), T('')]);
+  return { title, headers, rows, totalRow: rows.length - 1, ownDecimals: true };
 }
