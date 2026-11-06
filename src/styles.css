@@ -80,63 +80,54 @@ body {
     margin: 10mm 10mm 12mm;
   }
 
-  /* 1.1.13 — "סיכום חודשי לקליטת שכר" (A4 landscape, RTL, black-and-white friendly). */
-  @page {
-    @bottom-left {
-      content: "עמוד " counter(page) " מתוך " counter(pages);
-      font: 7pt "Heebo", "Segoe UI", sans-serif;
-      color: #333;
-    }
-  }
+  /* "סיכום חודשי לקליטת שכר": one continuous table, one employee per row (A4 landscape, RTL, grey-scale). */
   .pe-report {
     direction: rtl;
     width: 100%;
     font-family: var(--font-sans);
     color: #000;
     font-size: 8.5pt;
-    line-height: 1.25;
+    line-height: 1.2;
   }
   .pe-header {
     display: flex;
-    align-items: flex-start;
+    align-items: flex-end;
     justify-content: space-between;
     gap: 6mm;
-    border-bottom: 1.2pt solid #000;
-    padding-bottom: 1.5mm;
-    margin-bottom: 1mm;
+    border-bottom: 1.4pt solid #000;
+    padding-bottom: 1.2mm;
   }
   .pe-header h1 {
-    font-size: 15pt;
+    font-size: 14pt;
     font-weight: 700;
-    margin: 0 0 0.5mm;
+    margin: 0;
+    line-height: 1.15;
   }
   .pe-meta {
     display: flex;
     flex-wrap: wrap;
-    gap: 1mm 6mm;
+    gap: 0 5mm;
     font-size: 9pt;
+    margin-top: 0.6mm;
+  }
+  .pe-meta-alert {
+    font-weight: 700;
   }
   .pe-state {
     flex: none;
     border: 1pt solid #000;
-    padding: 1.2mm 3mm;
+    padding: 1mm 2.5mm;
     font-weight: 700;
-    font-size: 9pt;
-    max-width: 85mm;
+    font-size: 8.5pt;
+    max-width: 90mm;
   }
   .pe-state-draft {
     border-style: dashed;
   }
   .pe-legend {
-    font-size: 7.5pt;
-    color: #222;
-    margin-bottom: 2mm;
-  }
-  .pe-section {
-    margin-bottom: 3.5mm;
-  }
-  .pe-section.pe-keep {
-    break-inside: avoid;
+    font-size: 7pt;
+    color: #333;
+    margin: 0.8mm 0 1.6mm;
   }
   table.pe-table {
     width: 100%;
@@ -144,105 +135,170 @@ body {
     border-collapse: collapse;
   }
   table.pe-table thead {
-    display: table-header-group; /* repeated on every page */
+    display: table-header-group; /* column headings repeat on every page */
   }
-  table.pe-table tr {
-    break-inside: avoid;
+  table.pe-table tbody.pe-emp,
+  table.pe-table tbody.pe-total {
+    break-inside: avoid; /* an employee's record is never split across pages */
   }
-  table.pe-table col.pe-col-name {
-    width: 34mm;
-  }
-  table.pe-table col.pe-col-id {
-    width: 15mm;
-  }
-  table.pe-table col.pe-col-status {
-    width: 17mm;
-  }
-  table.pe-table th,
-  table.pe-table td {
-    border: 0.5pt solid #555;
-    padding: 0.6mm 1.2mm;
-    text-align: right;
-    vertical-align: middle;
-    overflow-wrap: anywhere;
-  }
-  table.pe-table tr.pe-running th {
-    border: none;
-    border-bottom: 0.8pt solid #000;
-    background: none !important;
-    padding: 0 0 1mm;
-    font-size: 8pt;
-    font-weight: 400;
-  }
-  .pe-running-section {
-    font-size: 11pt;
+  table.pe-table th {
+    background: #e4e4e4 !important;
+    border: 0.5pt solid #777;
     font-weight: 700;
-    margin-left: 4mm;
-  }
-  .pe-running-meta {
-    color: #333;
+    font-size: 7.6pt;
+    line-height: 1.15;
+    padding: 0.7mm 0.6mm;
+    text-align: center;
+    vertical-align: middle;
   }
   table.pe-table tr.pe-cols th {
-    background: #e6e6e6 !important;
-    font-size: 7.8pt;
-    font-weight: 700;
-    vertical-align: bottom;
+    font-size: 7.2pt;
+    padding: 0.7mm 0.3mm;
   }
-  table.pe-table th.pe-num,
-  table.pe-table td.pe-num {
+  table.pe-table tr.pe-groups th.pe-group {
+    font-size: 8pt;
+    border-bottom: 0.5pt solid #777;
+    background: #d4d4d4 !important;
+  }
+  table.pe-table th.pe-name-h {
+    text-align: right;
+    padding-right: 1.5mm;
+    background: #d4d4d4 !important;
+  }
+  .pe-sub-h {
+    font-size: 6.6pt;
+    font-weight: 600;
+    color: #222;
+  }
+  table.pe-table td {
+    border-left: 0.4pt solid #bbb;
+    border-right: 0.4pt solid #bbb;
+    padding: 0.55mm 0.6mm;
+    vertical-align: middle;
     text-align: center;
-    font-variant-numeric: tabular-nums;
   }
-  .pe-unit {
-    font-size: 6.5pt;
-    font-weight: 400;
-    color: #333;
+  table.pe-table tbody.pe-emp > tr:first-child > td {
+    border-top: 0.4pt solid #999;
+  }
+  table.pe-table tbody.pe-odd td {
+    background: #f2f2f2 !important;
   }
   table.pe-table td.pe-name {
-    font-weight: 600;
-    font-size: 8.5pt;
+    text-align: right;
+    padding-right: 1.5mm;
+    border-right: 0.5pt solid #777;
   }
-  table.pe-table td.pe-id {
-    font-size: 8pt;
+  .pe-name-main {
+    font-size: 8.6pt;
+    font-weight: 700;
+    line-height: 1.15;
+  }
+  .pe-name-sub {
+    display: flex;
+    gap: 1.5mm;
+    align-items: center;
+    font-size: 6.8pt;
+    color: #333;
+    line-height: 1.2;
+  }
+  .pe-num {
     font-variant-numeric: tabular-nums;
   }
-  table.pe-table tbody tr:nth-child(even) td {
-    background: #f4f4f4 !important;
+  .pe-state-tag {
+    font-size: 6.4pt;
+    padding: 0 0.8mm;
+    border-radius: 0.6mm;
+  }
+  .pe-state-ready {
+    color: #444;
+  }
+  .pe-state-review,
+  .pe-state-missing,
+  .pe-state-empty {
+    border: 0.5pt solid #000;
+    font-weight: 700;
+    color: #000;
+  }
+  .pe-state-missing,
+  .pe-state-empty {
+    background: #000 !important;
+    color: #fff !important;
+  }
+  table.pe-table td.pe-v {
+    position: relative;
+    font-variant-numeric: tabular-nums;
   }
   .pe-main {
-    font-size: 10pt;
+    font-size: 9pt;
     font-weight: 700;
     line-height: 1.15;
     white-space: nowrap;
   }
   .pe-sub {
-    font-size: 7pt;
+    font-size: 6.8pt;
     line-height: 1.1;
     color: #333;
     white-space: nowrap;
   }
+  table.pe-table td.pe-zero .pe-main {
+    font-weight: 400;
+    color: #8a8a8a;
+  }
   table.pe-table td.pe-flagged {
-    background: #dcdcdc !important;
+    background: #d6d6d6 !important;
   }
+  /* the review mark sits in the cell corner so it never widens the figure */
   .pe-mark {
+    position: absolute;
+    bottom: 0.3mm;
+    left: 0.5mm;
+    font-size: 7.5pt;
     font-weight: 700;
-    margin-right: 0.5mm;
+    line-height: 1;
   }
-  table.pe-table tr.pe-total td {
-    background: #e6e6e6 !important;
-    border-top: 1.2pt solid #000;
+  table.pe-table td.pe-days .pe-mark {
+    top: 0.3mm;
+    bottom: auto;
+  }
+  /* group separators: a stronger rule before the first column of each group */
+  table.pe-table th.pe-gs,
+  table.pe-table td.pe-gs,
+  table.pe-table th.pe-group {
+    border-right: 0.9pt solid #333;
+  }
+  table.pe-table td.pe-empty {
+    font-size: 8pt;
+    font-style: italic;
+    text-align: center;
+    color: #222;
+    border-right: 0.9pt solid #333;
+  }
+  table.pe-table tr.pe-below td {
+    border-top: none;
+    text-align: right;
+    font-size: 7pt;
+    line-height: 1.25;
+    padding: 0 1.2mm 0.6mm;
+    color: #222;
+  }
+  .pe-issue {
     font-weight: 700;
   }
-  .pe-issues {
-    margin-top: 1mm;
+  table.pe-table tbody.pe-total td {
+    background: #e4e4e4 !important;
+    border-top: 1.4pt solid #000;
+    border-bottom: 0.5pt solid #777;
   }
-  .pe-issues-table td {
+  table.pe-table tbody.pe-total .pe-main {
     font-size: 8pt;
   }
+  table.pe-table tbody.pe-emp:last-of-type td {
+    border-bottom: 0.4pt solid #999;
+  }
   .pe-footer {
-    margin-top: 3mm;
-    font-size: 7pt;
-    color: #333;
+    margin-top: 2mm;
+    font-size: 6.8pt;
+    color: #444;
   }
 }
 .print-only {

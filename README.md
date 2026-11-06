@@ -17,6 +17,8 @@ under the Israeli Hours of Work and Rest framework. Full Hebrew RTL interface.
 | [`docs/USER_GUIDE_HE.md`](docs/USER_GUIDE_HE.md) | Short Hebrew user guide |
 | [`docs/RELEASE_1.1.12_REPORT.md`](docs/RELEASE_1.1.12_REPORT.md) | 1.1.12: UX simplification & refinement — the 13 UX items, verification and screenshots |
 | [`docs/RELEASE_1.1.13_REPORT.md`](docs/RELEASE_1.1.13_REPORT.md) | 1.1.13: "סיכום חודשי לקליטת שכר" — payroll-entry A4 PDF with decimal hours, tests and fictional samples |
+| [`docs/PAYROLL_PDF_REDESIGN_REPORT.md`](docs/PAYROLL_PDF_REDESIGN_REPORT.md) | Unified one-row-per-employee payroll PDF, tooltip isolation fix, tests (awaiting approval) |
+| [`docs/RATE_200_EXPLANATION_HE.md`](docs/RATE_200_EXPLANATION_HE.md) | Hebrew explanation of the 175% / 200% weekly-rest overtime categories (no change made) |
 | [`docs/COVERAGE_REPORT_1.1.11.md`](docs/COVERAGE_REPORT_1.1.11.md) | 1.1.11: source-access assessment, catalog coverage by sector and evidence class, executable clauses, files to provide, regression results |
 | [`docs/LEGAL_AUDIT_1.1.10.md`](docs/LEGAL_AUDIT_1.1.10.md) | 1.1.10: audit of 1.1.9 against the legal research pack — correct / changed / not automatable, and the source and effective date of each activated rule |
 | [`docs/RELEASE_1.1.9_REPORT.md`](docs/RELEASE_1.1.9_REPORT.md) | 1.1.9: calculation verification, legal sources, agreements coverage, rules needing professional review, data-survival confirmation |

@@ -801,7 +801,9 @@ function ShiftRow({
         'text-center',
       )}
       {dayCell(
-        <button className="flex w-full flex-wrap items-center gap-1 text-right" onClick={onDetails}>
+        // Each warning indicator is its own hover / focus target (never nested in the details button, never sharing
+        // a hover area), so only the indicator under the pointer or keyboard focus shows its explanation.
+        <div className="flex w-full flex-wrap items-center gap-1.5 text-right">
           {entry?.status === 'missing_record' && <Badge tone="red">{STATUS_LABELS[entry.status]}</Badge>}
           {day.attendance.basis === 'review' && (
             <Badge tone="amber" title={day.attendance.reviewReasons.join('\n')}>
@@ -809,24 +811,28 @@ function ShiftRow({
             </Badge>
           )}
           {errorCount > 0 && (
-            <WarningTip warning={warnings.find((w) => w.severity === 'error')!}>
+            <WarningTip warning={warnings.find((w) => w.severity === 'error')!} onActivate={onDetails}>
               <Badge tone="red">
                 <IconAlert size={12} /> {errorCount > 1 ? `${errorCount} שגיאות` : (SHORT_ERROR[warnings.find((w) => w.severity === 'error')!.code] ?? 'שגיאה')}
               </Badge>
             </WarningTip>
           )}
           {reviewCount > 0 && (
-            <WarningTip warning={warnings.find((w) => w.severity === 'review')!}>
+            <WarningTip warning={warnings.find((w) => w.severity === 'review')!} onActivate={onDetails}>
               <Badge tone="amber">{reviewCount} לבדיקה</Badge>
             </WarningTip>
           )}
           {complianceCount > 0 && (
-            <WarningTip warning={warnings.find((w) => w.severity === 'compliance')!}>
+            <WarningTip warning={warnings.find((w) => w.severity === 'compliance')!} onActivate={onDetails}>
               <Badge tone="violet">{complianceCount} ציות</Badge>
             </WarningTip>
           )}
-          {entry?.note && <span className="max-w-[220px] truncate text-[12px] text-ink-soft">{entry.note}</span>}
-        </button>,
+          {entry?.note && (
+            <button className="max-w-[220px] truncate text-right text-[12px] text-ink-soft hover:text-ink" onClick={onDetails} title={entry.note}>
+              {entry.note}
+            </button>
+          )}
+        </div>,
       )}
       {first ? (
         <td rowSpan={rowSpan} className={`${cellBorder} no-print px-1 text-center`}>

@@ -52,7 +52,7 @@ export async function buildDemoDatabase(employees = 36, opts: { finalize?: boole
   const r = rng(20261101);
   const ym = '2026-11';
   for (let i = 0; i < employees; i++) {
-    const name = `${FIRST[i % FIRST.length]} ${LAST[(i * 7) % LAST.length]}`;
+    const name = `${FIRST[i % FIRST.length]} ${LAST[(i * 7 + Math.floor(i / FIRST.length) * 5) % LAST.length]}`;
     const travel = i === 5 ? { mode: 'none' as const, amountAgorot: null } : i % 6 === 0 ? { mode: 'monthly' as const, amountAgorot: 30000 } : undefined;
     const e = await repo.createEmployee(b.id, {
       fullName: name,
@@ -69,7 +69,7 @@ export async function buildDemoDatabase(employees = 36, opts: { finalize?: boole
       }
     }
     // Weekdays of November 2026 (1 Nov = Sunday). Fridays short, some Saturdays.
-    for (let d = 1; d <= 30; d++) {
+    for (let d = 1; d <= 30 && i !== 20; d++) { // employee #21 has no records this month
       const date = `2026-11-${pad(d)}`;
       const wd = new Date(Date.UTC(2026, 10, d)).getUTCDay(); // 0 = Sunday
       if (wd === 6) {
@@ -100,6 +100,7 @@ export async function buildDemoDatabase(employees = 36, opts: { finalize?: boole
     if (i % 3 === 0) await repo.saveAdjustment({ id: `inline:advance:${e.id}:${ym}`, businessId: b.id, employeeId: e.id, yearMonth: ym, category: 'advance', amountAgorot: 50000 + (i % 4) * 25000, date: null, description: 'מקדמה', details: {} });
     if (i % 4 === 1) await repo.saveAdjustment({ id: `inline:bonus:${e.id}:${ym}`, businessId: b.id, employeeId: e.id, yearMonth: ym, category: 'bonus', amountAgorot: 30000 + i * 1750, date: null, description: 'בונוס', details: {} });
     if (i % 5 === 2) await repo.setEmployeeMonth(b.id, e.id, ym, { recuperationDue: true });
+    if (i === 7) await repo.saveAdjustment({ id: `recup-${e.id}`, businessId: b.id, employeeId: e.id, yearMonth: ym, category: 'recuperation', amountAgorot: 41800, date: null, description: 'דמי הבראה', details: {} });
   }
   if (opts.finalize) {
     const summary = await computeBusinessMonth(repo, b.id, 2026, 11);

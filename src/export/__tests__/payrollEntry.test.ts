@@ -53,7 +53,7 @@ describe('decimal hours (total minutes / 60, never HH:MM read as a decimal)', ()
     expect(hhmm(minutes)).toBe(hm);
     expect(decimalHours(minutes)).toBe(dec);
     expect(decimalHoursNumber(minutes)).toBe(Number(dec));
-    expect(cellText('hours', { v: minutes, status: 'ok' })).toEqual({ main: dec, sub: hm });
+    expect(cellText('hours', { v: minutes, status: 'ok' })).toMatchObject({ main: dec, sub: hm });
     // The classic mistake (reading 7:36 as 7.36) never happens.
     expect(decimalHours(minutes)).not.toBe(hm.replace(':', '.').replace(/^0(\d)/, '$1'));
   });
@@ -71,7 +71,7 @@ describe('decimal hours (total minutes / 60, never HH:MM read as a decimal)', ()
     const roundedSum = r.rows.reduce((a, x) => a + Number(decimalHours(x.values.actualHours.v!)), 0);
     expect(roundedSum.toFixed(2)).toBe('21.99');
     expect(r.totals.actualHours.v).toBe(1320);
-    expect(cellText('hours', r.totals.actualHours)).toEqual({ main: '22.00', sub: '22:00' });
+    expect(cellText('hours', r.totals.actualHours)).toMatchObject({ main: '22.00', sub: '22:00' });
     expect(cellText('hours', r.totals.regular).main).toBe('22.00');
   });
 });
@@ -144,10 +144,12 @@ describe('payroll-entry report content', () => {
     const { r } = await report(repo, b.id);
     const E = r.rows.find((x) => x.employeeId === empty.id)!;
     const P = r.rows.find((x) => x.employeeId === partial.id)!;
-    // Nothing recorded: zeros shown as "–", no issues, travel not needed.
-    expect(cellText('hours', E.values.actualHours)).toEqual({ main: '–', sub: null });
-    expect(E.values.travel.status).toBe('ok');
-    expect(E.issues).toEqual([]);
+    // Nothing recorded for the month: never "ready" — state "empty", attendance values not final, reason given.
+    expect(E.state).toBe('empty');
+    expect(E.values.actualHours).toEqual({ v: 0, status: 'missing' });
+    expect(E.values.travel.status).toBe('ok'); // money columns keep their own status
+    expect(E.issues).toEqual(['אין רישומי נוכחות או היעדרות לחודש זה']);
+    expect(P.state).toBe('missing');
     // Incomplete record: hours flagged "missing", travel not configured → "לא הוגדר", reasons listed.
     expect(P.values.actualHours.status).toBe('missing');
     expect(P.values.regular.status).toBe('missing');
@@ -161,7 +163,7 @@ describe('payroll-entry report content', () => {
     // Payroll entry sheet: status column and the open reasons.
     const tbl = payrollEntryTable('קליטת שכר', r);
     const row = tbl.rows.find((x) => (x[0] as { v: string }).v === 'רישום חסר')!;
-    expect((row[2] as { v: string }).v).toBe('לבדיקה');
+    expect((row[2] as { v: string }).v).toBe('חסר');
     expect((row[row.length - 1] as { v: string }).v).toContain('רישומים חסרים');
   });
 
@@ -193,6 +195,32 @@ describe('payroll-entry report content', () => {
     ({ r } = await report(repo, b.id));
     expect(r.columns.map((c) => c.key)).toContain('recupAmount');
     expect(r.totals.recupAmount.v).toBe(41800);
+  });
+});
+
+describe('display: genuine zero vs missing vs awaiting verification', () => {
+  it('zero prints "0", a missing setting "לא הוגדר", an undeterminable value "לבדיקה"; days without needless decimals', () => {
+    expect(cellText('hours', { v: 0, status: 'ok' })).toEqual({ main: '0', sub: null, zero: true });
+    expect(cellText('money', { v: 0, status: 'ok' })).toEqual({ main: '0', sub: null, zero: true });
+    expect(cellText('money', { v: null, status: 'missing' }).main).toBe('לא הוגדר');
+    expect(cellText('hours', { v: null, status: 'review' }).main).toBe('לבדיקה');
+    expect(cellText('days', { v: 2200, status: 'ok' }).main).toBe('22');
+    expect(cellText('days', { v: 150, status: 'ok' }).main).toBe('1.50');
+    expect(cellText('flag', { v: 0, status: 'ok' }).main).toBe('לא');
+  });
+
+  it('a fully recorded employee is "ready"; one with a review item is "review"', async () => {
+    const repo = await open();
+    const { b, employee } = await business(repo);
+    const e = await employee('מוכנה');
+    for (let d = 2; d <= 5; d++) await repo.upsertShift(b.id, e.id, shift(`2026-11-0${d}`, '08:00', '16:30', 30));
+    const sat = await employee('שבת');
+    await repo.upsertShift(b.id, sat.id, shift('2026-11-07', '09:00', '13:00'));
+    const { r } = await report(repo, b.id);
+    expect(r.rows.find((x) => x.employeeId === e.id)!.state).toBe('ready');
+    const S = r.rows.find((x) => x.employeeId === sat.id)!;
+    expect(S.state).toBe('review');
+    expect(S.values.p150.v).toBe(240); // weekly-rest hours as computed by the engine
   });
 });
 

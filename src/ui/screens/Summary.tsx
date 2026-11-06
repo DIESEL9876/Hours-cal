@@ -136,6 +136,27 @@ export function SummaryScreen({ businessId }: { businessId: string }) {
 
   const payrollEntry = useMemo(() => (summary ? buildPayrollEntryReport(summary, fin) : null), [summary, fin]);
 
+  // While printing, the document title names the report (shown by the print engine if its own header is enabled,
+  // and used as the default PDF file name).
+  useEffect(() => {
+    if (!business) return;
+    const printTitle = `סיכום חודשי לקליטת שכר - ${business.name} - ${monthTitle(ym.year, ym.month)}`;
+    let saved = document.title;
+    const before = () => {
+      saved = document.title;
+      document.title = printTitle;
+    };
+    const after = () => {
+      document.title = saved;
+    };
+    window.addEventListener('beforeprint', before);
+    window.addEventListener('afterprint', after);
+    return () => {
+      window.removeEventListener('beforeprint', before);
+      window.removeEventListener('afterprint', after);
+    };
+  }, [business, ym]);
+
   if (!business || !summary || !review || !payrollEntry) return null;
   const g = summary.grandTotal;
   const gp = premiumMinutes(g.buckets);

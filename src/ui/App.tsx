@@ -112,7 +112,7 @@ export function App({ repo, licensing = null }: { repo: Repository; licensing?: 
               </nav>
             </div>
           </header>
-          <main className="mx-auto w-full max-w-[1600px] flex-1 px-6 py-6">{screen}</main>
+          <main className="mx-auto w-full max-w-[1600px] flex-1 px-6 py-6 print:p-0">{screen}</main>
           <footer className={`no-print px-6 py-3 text-center text-[12px] text-ink-soft ${route.name === 'attendance' ? 'pb-28' : ''}`} data-testid="copyright-footer">
             {COPYRIGHT} · Hours-Cal גרסה {__APP_VERSION__}
           </footer>

@@ -29,6 +29,12 @@ export interface PeValue {
   status: PeStatus;
 }
 
+/**
+ * ready = calculated, nothing open · review = figures exist but something needs a check · missing = incomplete
+ * records or a required setting is missing · empty = no attendance or absence recorded at all for the month.
+ */
+export type PeRowState = 'ready' | 'review' | 'missing' | 'empty';
+
 export interface PeRow {
   employeeId: string;
   name: string;
@@ -36,6 +42,7 @@ export interface PeRow {
   values: Record<string, PeValue>;
   /** Short Hebrew reasons when anything in the row is not final. Empty = ready for payroll entry. */
   issues: string[];
+  state: PeRowState;
 }
 
 export interface PayrollEntryReport {
@@ -66,6 +73,7 @@ const ABSENCE: { cat: DayStatusKind; key: string; label: string; always: boolean
 ];
 
 const ok = (v: number | null): PeValue => ({ v, status: 'ok' });
+const MONEY_KEYS = new Set(['travel', 'advance', 'bonus', 'recupFlag', 'recupAmount', 'reserveMoney', 'otherMoney', 'deduction']);
 const worst = (a: PeStatus, b: PeStatus): PeStatus => (a === 'missing' || b === 'missing' ? 'missing' : a === 'review' || b === 'review' ? 'review' : 'ok');
 
 /** Short labels for the engine's open review flags (what to check), grouped by code. */
@@ -106,7 +114,11 @@ function absenceReviewLabels(r: BusinessSummaryRow): string[] {
 interface Built {
   values: Record<string, PeValue>;
   issues: string[];
+  state: PeRowState;
 }
+
+export const ROW_STATE_LABELS: Record<PeRowState, string> = { ready: 'מוכן', review: 'לבדיקה', missing: 'חסר', empty: 'אין רישומים' };
+export const NO_RECORDS_TEXT = 'אין רישומי נוכחות או היעדרות לחודש זה';
 
 function buildRow(r: BusinessSummaryRow, f: MonthFinancials | null): Built {
   const t = r.totals;
@@ -115,6 +127,9 @@ function buildRow(r: BusinessSummaryRow, f: MonthFinancials | null): Built {
   const p = premiumMinutes(b);
   const cats = absenceByCategory(r.result.days.map((d) => d.attendance));
   const issues: string[] = [];
+  // Nothing recorded for the month (no shift, no day type): never presented as a ready zero.
+  const empty = r.result.days.every((d) => d.shifts.length === 0 && !d.status);
+  if (empty) issues.push(NO_RECORDS_TEXT);
 
   // Hours status — from the engine's own counters.
   let hoursStatus: PeStatus = 'ok';
@@ -177,15 +192,19 @@ function buildRow(r: BusinessSummaryRow, f: MonthFinancials | null): Built {
     v.otherMoney = ok(f.byCategory.other);
     v.deduction = ok(f.advance.authorizedDeductionAgorot);
   }
-  return { values: v, issues };
+  if (empty) for (const k of Object.keys(v)) if (!MONEY_KEYS.has(k)) v[k] = { v: v[k].v, status: 'missing' };
+  const statuses = Object.values(v).map((x) => x.status);
+  const state: PeRowState = empty ? 'empty' : statuses.includes('missing') ? 'missing' : issues.length || statuses.includes('review') ? 'review' : 'ready';
+  return { values: v, issues, state };
 }
 
 /** Builds the payroll-entry report. `fin` null → the money section is omitted (no payroll data loaded). */
 export function buildPayrollEntryReport(s: BusinessSummary, fin: BusinessFin): PayrollEntryReport {
   const built = s.rows.map((r) => ({ r, ...buildRow(r, fin?.byEmployee.get(r.employeeId) ?? null) }));
-  const rows: PeRow[] = built.map(({ r, values, issues }) => ({ employeeId: r.employeeId, name: r.name, number: r.employeeNumber ?? '', values, issues }));
+  const rows: PeRow[] = built.map(({ r, values, issues, state }) => ({ employeeId: r.employeeId, name: r.name, number: r.employeeNumber ?? '', values, issues, state }));
 
-  const any = (key: string) => rows.some((x) => (x.values[key]?.v ?? 0) !== 0 || x.values[key]?.status !== 'ok');
+  // A column is relevant when some employee has a figure (or an undeterminable one) — not merely a flagged zero.
+  const any = (key: string) => rows.some((x) => { const val = x.values[key]; return !!val && (val.v === null || val.v !== 0); });
   const cols: PeColumn[] = [];
   const add = (key: string, label: string, kind: PeKind, section: PeSection, show = true) => {
     if (show) cols.push({ key, label, kind, section });
@@ -261,18 +280,25 @@ export function hhmm(minutes: number): string {
 }
 export const moneyText = (agorot: number): string => (agorot / 100).toLocaleString('he-IL', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
-/** Text of a cell for print/CSV. `main` is the payroll-entry figure; `sub` (hours only) the HH:MM reference. */
-export function cellText(kind: PeKind, val: PeValue | undefined): { main: string; sub: string | null } {
-  if (!val || val.v === null) return { main: val?.status === 'missing' ? 'לא הוגדר' : val?.status === 'review' ? 'לבדיקה' : '–', sub: null };
+/** Day count: whole days without decimals ("22"), fractions with two ("1.50"). */
+export const daysText = (hundredths: number): string => (hundredths % 100 === 0 ? String(hundredths / 100) : formatDays(hundredths));
+
+/**
+ * Text of a cell for print. `main` is the payroll-entry figure; `sub` (hours only) the HH:MM reference.
+ * A genuine zero prints "0"; a value that is not set prints "לא הוגדר"; one that cannot be determined yet "לבדיקה".
+ */
+export function cellText(kind: PeKind, val: PeValue | undefined): { main: string; sub: string | null; zero: boolean } {
+  if (!val || val.v === null) return { main: val?.status === 'missing' ? 'לא הוגדר' : val?.status === 'review' ? 'לבדיקה' : '–', sub: null, zero: false };
+  if (val.v === 0 && kind !== 'flag') return { main: '0', sub: null, zero: true };
   switch (kind) {
     case 'hours':
-      return val.v === 0 ? { main: '–', sub: null } : { main: decimalHours(val.v), sub: hhmm(val.v) };
+      return { main: decimalHours(val.v), sub: hhmm(val.v), zero: false };
     case 'days':
-      return { main: val.v === 0 ? '–' : formatDays(val.v), sub: null };
+      return { main: daysText(val.v), sub: null, zero: false };
     case 'money':
-      return { main: val.v === 0 ? '–' : moneyText(val.v), sub: null };
+      return { main: moneyText(val.v), sub: null, zero: false };
     case 'flag':
-      return { main: val.v ? 'כן' : 'לא', sub: null };
+      return { main: val.v ? 'כן' : 'לא', sub: null, zero: !val.v };
   }
 }
 

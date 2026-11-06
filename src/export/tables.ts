@@ -16,7 +16,7 @@ import {
 import { formatDateHe, STATUS_LABELS } from '../ui/format';
 import type { MonthlyAdjustment } from '../data/repo';
 import { ADJUSTMENT_LABELS, type MonthFinancials, type sumFinancials } from '../payroll/financials';
-import type { PayrollEntryReport, PeValue } from './payrollEntry';
+import { ROW_STATE_LABELS, type PayrollEntryReport, type PeValue } from './payrollEntry';
 
 /** 'days' holds HUNDREDTHS of a day (fractional day counts, summed exactly from the daily records). */
 /** 'dec' holds MINUTES rendered as decimal hours only (payroll-entry sheet, 1.1.13). */
@@ -352,8 +352,8 @@ export function payrollEntryTable(title: string, report: PayrollEntryReport): Ta
     }
     return out;
   };
-  const rows: Cell[][] = report.rows.map((r) => [T(r.name), T(r.number), T(r.issues.length ? 'לבדיקה' : 'מוכן'), ...cells(r.values, false), T(r.issues.join(' · '))]);
-  const open = report.rows.filter((r) => r.issues.length).length;
-  rows.push([T('סה״כ לעסק'), T(''), T(open ? `${open} לבדיקה` : 'מוכן'), ...cells(report.totals, true), T('')]);
+  const rows: Cell[][] = report.rows.map((r) => [T(r.name), T(r.number), T(ROW_STATE_LABELS[r.state]), ...cells(r.values, false), T(r.issues.join(' · '))]);
+  const open = report.rows.filter((r) => r.state !== 'ready').length;
+  rows.push([T('סה״כ לעסק'), T(''), T(open ? `${open} אינם מוכנים` : 'מוכן'), ...cells(report.totals, true), T('')]);
   return { title, headers, rows, totalRow: rows.length - 1, ownDecimals: true };
 }

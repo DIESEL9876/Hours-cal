@@ -1,4 +1,5 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from 'react';
+import { createPortal } from 'react-dom';
 import { IconAlert, IconCheck, IconInfo, IconX } from './icons';
 import { formatDecimalHours, type Severity, type Warning } from '../engine';
 
@@ -226,27 +227,123 @@ export function warningAction(w: Warning): string {
  * Accessible explanation for a warning / review indicator (req 5). Wraps the indicator; the tooltip appears on hover
  * and on keyboard focus, and states what, why, who/when, and the action to take.
  */
-export function WarningTip({ warning, name, children }: { warning: Warning; name?: string; children: ReactNode }) {
+// Only one warning tooltip is open at a time, app-wide: opening one closes any other (hover or keyboard focus).
+let activeTip: string | null = null;
+const tipListeners = new Set<() => void>();
+function setActiveTip(id: string | null) {
+  if (activeTip === id) return;
+  activeTip = id;
+  for (const l of tipListeners) l();
+}
+function useActiveTip(): string | null {
+  return useSyncExternalStore(
+    (cb) => {
+      tipListeners.add(cb);
+      return () => tipListeners.delete(cb);
+    },
+    () => activeTip,
+  );
+}
+
+/**
+ * Accessible explanation for a warning / review indicator (req 5). Each indicator is its own hover and keyboard-focus
+ * target; the tooltip is rendered in a portal (never clipped by tables or scrolling containers), placed below the
+ * indicator or above it when there is no room, kept inside the window, and only one is visible at a time.
+ */
+export function WarningTip({ warning, name, children, onActivate }: { warning: Warning; name?: string; children: ReactNode; onActivate?: () => void }) {
   const w = warning;
+  const id = useId();
+  const open = useActiveTip() === id;
+  const anchor = useRef<HTMLSpanElement>(null);
+  const tip = useRef<HTMLDivElement>(null);
+  const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
+
+  const place = useCallback(() => {
+    const a = anchor.current?.getBoundingClientRect();
+    const t = tip.current;
+    if (!a || !t) return;
+    const gap = 6;
+    const margin = 8;
+    const { width, height } = t.getBoundingClientRect();
+    const below = a.bottom + gap + height <= window.innerHeight - margin;
+    const top = below ? a.bottom + gap : Math.max(margin, a.top - gap - height);
+    // RTL: align the tooltip's right edge with the indicator's right edge, then keep it inside the window.
+    const left = Math.min(Math.max(margin, a.right - width), window.innerWidth - width - margin);
+    setPos({ top, left });
+  }, []);
+
+  useLayoutEffect(() => {
+    if (!open) {
+      setPos(null);
+      return;
+    }
+    place();
+    const onMove = () => place();
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && setActiveTip(null);
+    window.addEventListener('scroll', onMove, true);
+    window.addEventListener('resize', onMove);
+    window.addEventListener('keydown', onKey);
+    return () => {
+      window.removeEventListener('scroll', onMove, true);
+      window.removeEventListener('resize', onMove);
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [open, place]);
+  useEffect(() => () => (activeTip === id ? setActiveTip(null) : undefined), [id]);
+
+  const close = () => activeTip === id && setActiveTip(null);
+  const tipId = `${id}-tip`;
   return (
-    <span className="group relative inline-flex outline-none" tabIndex={0} role="note" aria-label={`${severityLabel[w.severity]}. ${w.message}. ${warningAction(w)}`}>
+    <span
+      ref={anchor}
+      className="relative inline-flex rounded outline-none focus-visible:ring-2 focus-visible:ring-brand"
+      tabIndex={0}
+      role="button"
+      aria-label={`${severityLabel[w.severity]}: ${w.message}`}
+      aria-describedby={open ? tipId : undefined}
+      data-testid="warning-tip"
+      data-severity={w.severity}
+      onMouseEnter={() => setActiveTip(id)}
+      onMouseLeave={close}
+      onFocus={() => setActiveTip(id)}
+      onBlur={close}
+      onClick={(e) => {
+        e.stopPropagation();
+        onActivate?.();
+      }}
+      onKeyDown={(e) => {
+        if (onActivate && (e.key === 'Enter' || e.key === ' ')) {
+          e.preventDefault();
+          onActivate();
+        }
+      }}
+    >
       {children}
-      <span
-        role="tooltip"
-        className="pointer-events-none absolute right-0 top-full z-40 mt-1 hidden w-72 rounded-lg border border-line bg-white p-3 text-right text-[12px] leading-relaxed text-ink shadow-xl group-hover:block group-focus-within:block"
-      >
-        <span className="mb-1 block font-semibold">{severityLabel[w.severity]}</span>
-        <span className="block text-ink-soft">{severityMeaning[w.severity]}</span>
-        <span className="mt-1.5 block">{w.message}</span>
-        {(name || w.date) && (
-          <span className="mt-1.5 block text-ink-soft">
-            {name ? `עובד: ${name}` : ''}
-            {name && w.date ? ' · ' : ''}
-            {w.date ? `תאריך: ${w.date}` : ''}
-          </span>
+      {open &&
+        createPortal(
+          <div
+            ref={tip}
+            id={tipId}
+            role="tooltip"
+            dir="rtl"
+            data-severity={w.severity}
+            className="pointer-events-none fixed z-[70] w-72 max-w-[calc(100vw-16px)] rounded-lg border border-line bg-white p-3 text-right text-[12px] leading-relaxed text-ink shadow-xl"
+            style={pos ? { top: pos.top, left: pos.left } : { top: 0, left: 0, visibility: 'hidden' }}
+          >
+            <span className="mb-1 block font-semibold">{severityLabel[w.severity]}</span>
+            <span className="block text-ink-soft">{severityMeaning[w.severity]}</span>
+            <span className="mt-1.5 block">{w.message}</span>
+            {(name || w.date) && (
+              <span className="mt-1.5 block text-ink-soft">
+                {name ? `עובד: ${name}` : ''}
+                {name && w.date ? ' · ' : ''}
+                {w.date ? `תאריך: ${w.date}` : ''}
+              </span>
+            )}
+            <span className="mt-1.5 block font-medium text-brand">פעולה: {warningAction(w)}</span>
+          </div>,
+          document.body,
         )}
-        <span className="mt-1.5 block font-medium text-brand">פעולה: {warningAction(w)}</span>
-      </span>
     </span>
   );
 }

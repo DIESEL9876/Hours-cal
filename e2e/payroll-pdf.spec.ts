@@ -1,6 +1,7 @@
 /**
- * 1.1.13 — "סיכום חודשי לקליטת שכר" A4 PDF through the real UI: Hebrew RTL, decimal hours with H:MM, multi-page A4
- * output with repeated headers, nothing clipped, and the same figures as the on-screen summary and the Excel export.
+ * "סיכום חודשי לקליטת שכר" A4 PDF through the real UI: ONE continuous table (one employee = one row), Hebrew RTL,
+ * decimal hours with HH:MM in the same cell, multi-page A4 output with repeated headings, nothing clipped, distinct
+ * zero / missing / review states, and the same figures as the on-screen summary and the Excel export.
  */
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { expect, test, type Page } from '@playwright/test';
@@ -27,10 +28,12 @@ async function pdfText(bytes: Buffer): Promise<string[]> {
   return pages;
 }
 
-test('payroll-entry PDF: RTL, decimal hours, multi-page A4, no clipping, consistent with summary and Excel', async ({ page }) => {
+const A4 = { format: 'A4' as const, landscape: true, preferCSSPageSize: true, printBackground: true };
+
+test('payroll-entry PDF: one table, one row per employee, decimal + HH:MM, multi-page A4, no clipping, consistent', async ({ page }) => {
   const errors: string[] = [];
   page.on('pageerror', (e) => errors.push(e.message));
-  await openSummary(page, 36);
+  await openSummary(page, 38);
 
   // On-screen summary figures (the reference).
   const screenActual = (await page.getByTestId('grand-actual-hours').innerText()).split('\n')[0].trim();
@@ -42,64 +45,83 @@ test('payroll-entry PDF: RTL, decimal hours, multi-page A4, no clipping, consist
   await expect(report).toBeVisible();
   await expect(page.getByTestId('summary-table')).toBeHidden();
   await expect(report).toHaveAttribute('dir', 'rtl');
+  expect(await page.evaluate(() => getComputedStyle(document.querySelector('.pe-report')!).direction)).toBe('rtl');
   await expect(page.getByTestId('pe-title')).toHaveText('סיכום חודשי לקליטת שכר');
   await expect(report).toContainText(DEMO_BUSINESS);
   await expect(report).toContainText('נובמבר 2026');
   await expect(page.getByTestId('pe-month-state')).toContainText('טיוטה');
-  // Three separated sections: days, hours, NIS amounts; one row per employee in each.
-  for (const s of ['days', 'hours', 'money']) {
-    const sec = page.getByTestId(`pe-section-${s}`);
-    await expect(sec.first()).toBeVisible();
-    await expect(sec.first().getByTestId('pe-row')).toHaveCount(36);
-  }
-  expect(await page.evaluate(() => getComputedStyle(document.querySelector('.pe-report')!).direction)).toBe('rtl');
 
-  // Hours: decimal value prominent + H:MM reference, and both agree (minutes / 60).
-  const hoursTotal = page.getByTestId('pe-section-hours').first().getByTestId('pe-total');
-  const cell = hoursTotal.locator('td[data-col="actualHours"]');
+  // ONE table; every employee exactly once; days, hours and money in the same row.
+  await expect(report.locator('table')).toHaveCount(1);
+  const rows = page.getByTestId('pe-row');
+  await expect(rows).toHaveCount(38);
+  const names = await rows.locator('.pe-name-main').allInnerTexts();
+  expect(new Set(names).size).toBe(38);
+  const ready = rows.filter({ has: page.locator('[data-col="regular"]') }).first();
+  for (const k of ['actualDays', 'paidDays', 'actualHours', 'paidHours', 'regular', 'ot125', 'ot150', 'vacationDays', 'vacationHours', 'sickDays', 'sickHours', 'holidayDays', 'holidayHours', 'travel', 'advance', 'bonus', 'recupFlag'])
+    await expect(ready.locator(`td[data-col="${k}"]`), k).toHaveCount(1);
+  for (const k of ['p150', 'p175', 'p200']) await expect(page.locator(`thead th[data-col="${k}"]`), k).toHaveCount(1); // weekly-rest work in the data
+  // Employee records are never split across pages; headings repeat on every page.
+  expect(await page.evaluate(() => getComputedStyle(document.querySelector('tbody.pe-emp')!).breakInside)).toBe('avoid');
+  expect(await page.evaluate(() => getComputedStyle(document.querySelector('.pe-table thead')!).display)).toBe('table-header-group');
+  expect(Number(await page.getByTestId('pe-table').getAttribute('data-width-mm'))).toBeLessThanOrEqual(281);
+
+  // Hours: decimal (prominent) and HH:MM in the SAME cell, and they agree (minutes / 60).
+  const totals = page.getByTestId('pe-total');
+  const cell = totals.locator('td[data-col="actualHours"]');
   const main = (await cell.locator('.pe-main').innerText()).replace('*', '').trim();
   const sub = (await cell.locator('.pe-sub').innerText()).trim();
   const [h, m] = sub.split(':').map(Number);
   expect(main).toBe(((h * 60 + m) / 60).toFixed(2));
-  expect(sub.replace(/^0/, '')).toBe(screenActual); // same total as the on-screen summary
-  const fsMain = await cell.locator('.pe-main').evaluate((e) => parseFloat(getComputedStyle(e).fontSize));
-  const fsSub = await cell.locator('.pe-sub').evaluate((e) => parseFloat(getComputedStyle(e).fontSize));
-  expect(fsMain).toBeGreaterThan(fsSub);
-  const paidSub = (await hoursTotal.locator('td[data-col="paidHours"] .pe-sub').innerText()).trim();
-  expect(paidSub.replace(/^0/, '')).toBe(screenPaid);
-  const bonusTotal = (await page.getByTestId('pe-section-money').first().getByTestId('pe-total').locator('td[data-col="bonus"] .pe-main').innerText()).trim();
-  expect(`₪${bonusTotal}`).toBe(screenBonus);
+  expect(sub.replace(/^0/, '')).toBe(screenActual);
+  expect(await cell.locator('.pe-main').evaluate((e) => parseFloat(getComputedStyle(e).fontSize))).toBeGreaterThan(await cell.locator('.pe-sub').evaluate((e) => parseFloat(getComputedStyle(e).fontSize)));
+  expect((await totals.locator('td[data-col="paidHours"] .pe-sub').innerText()).trim().replace(/^0/, '')).toBe(screenPaid);
+  expect(`₪${(await totals.locator('td[data-col="bonus"] .pe-main').innerText()).trim()}`).toBe(screenBonus);
 
-  // Open items are marked, never shown as final, and listed for review.
-  await expect(page.locator('td.pe-flagged').first()).toBeVisible();
-  await expect(page.getByTestId('pe-issues')).toContainText('רישומים חסרים');
-  await expect(page.getByTestId('pe-issues')).toContainText('החזר נסיעות לא הוגדר');
+  // States: genuine zero ("0"), missing ("לא הוגדר" / no records), review (*), and "ready" only when complete.
+  await expect(rows.filter({ hasText: 'אין רישומי נוכחות או היעדרות לחודש זה' })).toHaveCount(1);
+  await expect(page.locator('tbody[data-state="empty"] .pe-state-tag')).toHaveText('אין רישומים');
+  await expect(page.locator('td[data-col="travel"]').filter({ hasText: 'לא הוגדר' })).toHaveCount(1);
+  await expect(page.locator('tbody[data-state="missing"]')).not.toHaveCount(0);
+  await expect(page.locator('td.pe-flagged .pe-mark').first()).toBeVisible();
+  await expect(page.locator('tbody[data-state="ready"] td.pe-zero').first()).toHaveText('0');
+  await expect(page.locator('tbody[data-state="ready"] .pe-mark')).toHaveCount(0);
+  await expect(page.locator('tr.pe-below').filter({ hasText: 'לבדיקה:' }).first()).toBeVisible();
 
-  // Nothing clipped: every table fits its page width and no cell overflows (A4 landscape content width).
-  await page.setViewportSize({ width: 1047, height: 720 }); // 277 mm at 96 dpi
+  // Nothing clipped or overlapping: every cell's content fits its box at the A4 content width (281 mm).
+  await page.setViewportSize({ width: 1062, height: 760 });
   const overflow = await page.evaluate(() => {
     const bad: string[] = [];
-    for (const t of document.querySelectorAll<HTMLTableElement>('.pe-report table')) {
-      if (t.scrollWidth > t.parentElement!.clientWidth + 1) bad.push(`table ${t.className} ${t.scrollWidth}>${t.parentElement!.clientWidth}`);
-      for (const c of t.querySelectorAll<HTMLElement>('td, th')) if (c.scrollWidth > c.clientWidth + 1) bad.push(`cell "${c.innerText.slice(0, 20)}" ${c.scrollWidth}>${c.clientWidth}`);
+    const t = document.querySelector<HTMLTableElement>('.pe-table')!;
+    if (t.scrollWidth > t.parentElement!.clientWidth + 1) bad.push(`table ${t.scrollWidth}>${t.parentElement!.clientWidth}`);
+    for (const c of t.querySelectorAll<HTMLElement>('td, th')) if (c.scrollWidth > c.clientWidth + 1) bad.push(`cell "${c.innerText.slice(0, 24)}" ${c.scrollWidth}>${c.clientWidth}`);
+    for (const el of t.querySelectorAll<HTMLElement>('.pe-main, .pe-sub, .pe-name-main')) {
+      const r = el.getBoundingClientRect();
+      const p = el.closest('td, th')!.getBoundingClientRect();
+      if (r.right > p.right + 0.5 || r.left < p.left - 0.5) bad.push(`text "${el.innerText}" outside its cell`);
     }
     return bad;
   });
   expect(overflow).toEqual([]);
 
-  // A4 PDF: several pages, repeated report/section header and column headers on every page.
-  const pdf = await page.pdf({ format: 'A4', landscape: true, preferCSSPageSize: true, printBackground: true });
+  // A4 PDF: several pages; every page has the column headings and page number; pages 2+ the business/month line.
+  const pdf = await page.pdf(A4);
   mkdirSync('test-results', { recursive: true });
-  writeFileSync('test-results/payroll-entry-36.pdf', pdf);
+  writeFileSync('test-results/payroll-entry-38.pdf', pdf);
   const pages = await pdfText(pdf);
   expect(pages.length).toBeGreaterThan(1);
   for (const [i, text] of pages.entries()) {
     const flat = text.replace(/\s+/g, '');
-    // Running header and column headers on every page (PDF text order of Hebrew words may be reversed).
-    expect(flat, `page ${i + 1}`).toContain('לקליטת');
-    expect(flat, `page ${i + 1}`).toContain(DEMO_BUSINESS.replace(/\s+/g, '').slice(0, 6));
-    expect(flat, `page ${i + 1}`).toContain('עובד');
+    for (const w of ['עובד', 'שעותעבודה', 'חופשה', 'מחלה', 'נסיעות', 'הבראה']) expect(flat, `page ${i + 1}: ${w}`).toMatch(new RegExp(w.length > 5 ? `${w}|${w.split('').reverse().join('')}|עבודהשעות` : w));
     expect(flat, `page ${i + 1}`).toMatch(/עמוד\d+|\d+עמוד/);
+    if (i > 0) expect(flat, `page ${i + 1}`).toContain('לקליטת');
+  }
+  // Each employee name appears in the PDF exactly once (no per-category repetition).
+  const all = pages.join(' ').replace(/\s+/g, '');
+  for (const n of names.slice(0, 10)) {
+    const w = n.trim().split(/\s+/);
+    const count = (x: string) => all.split(x).length - 1;
+    expect(count(w.join('')) + (w.length > 1 ? count([...w].reverse().join('')) : 0), n).toBe(1); // PDF text may reverse word order
   }
 
   // Excel: the "קליטת שכר" sheet carries the same totals.
@@ -109,7 +131,6 @@ test('payroll-entry PDF: RTL, decimal hours, multi-page A4, no clipping, consist
   const wb = new ExcelJS.Workbook();
   await wb.xlsx.load(readFileSync((await (await dl).path())!) as unknown as ArrayBuffer);
   const ws = wb.getWorksheet('קליטת שכר')!;
-  expect(ws).toBeTruthy();
   const headers = (ws.getRow(4).values as unknown[]).map((v) => String(v ?? ''));
   const decCol = headers.indexOf('שעות בפועל (עשרוני)');
   expect(decCol).toBeGreaterThan(0);
@@ -120,24 +141,20 @@ test('payroll-entry PDF: RTL, decimal hours, multi-page A4, no clipping, consist
   expect(errors).toEqual([]);
 });
 
-test('payroll-entry PDF with a few employees: all three sections on the first A4 page', async ({ page }) => {
-  await openSummary(page, 4);
+test('payroll-entry PDF with a few employees fits on one A4 page', async ({ page }) => {
+  await openSummary(page, 6);
   await page.emulateMedia({ media: 'print' });
-  const pdf = await page.pdf({ format: 'A4', landscape: true, preferCSSPageSize: true, printBackground: true });
-  writeFileSync('test-results/payroll-entry-4.pdf', pdf);
-  const pages = await pdfText(pdf);
-  expect(pages.length).toBeLessThanOrEqual(2); // the review list may continue on a second page
-  const first = pages[0].replace(/\s+/g, '');
-  for (const w of ['ימים', 'שעות', 'סכומים', 'לעסק']) expect(first).toContain(w);
-  expect(first.split('לעסק').length - 1).toBe(3); // the three section totals are all on page 1
+  const pdf = await page.pdf(A4);
+  writeFileSync('test-results/payroll-entry-6.pdf', pdf);
+  expect((await pdfText(pdf)).length).toBe(1);
 });
 
-test('closed month: the report is marked final and shows the figures stored for that month', async ({ page }) => {
+test('closed month: the report is marked final and shows the same figures as the screen', async ({ page }) => {
   await openSummary(page, 4, true);
   const screenActual = (await page.getByTestId('grand-actual-hours').innerText()).split('\n')[0].trim();
   await page.emulateMedia({ media: 'print' });
   await expect(page.getByTestId('pe-month-state')).toContainText('סופי – החודש נסגר');
   await expect(page.getByTestId('pe-month-state')).not.toContainText('השתנו');
-  const sub = await page.getByTestId('pe-section-hours').getByTestId('pe-total').locator('td[data-col="actualHours"] .pe-sub').innerText();
+  const sub = await page.getByTestId('pe-total').locator('td[data-col="actualHours"] .pe-sub').innerText();
   expect(sub.trim().replace(/^0/, '')).toBe(screenActual);
 });
