@@ -64,3 +64,9 @@ by reqs 7 and 11.
 - **הבראה כן/לא** is a manual monthly eligibility flag, separate from any recuperation *amount*; it does not invent an amount or change the legal meaning of recuperation eligibility. The recuperation amount (when needed) is still entered in the detailed components dialog and appears in the detailed export sheet.
 - **Inline advances/bonuses:** the summary cell edits a single canonical per-month value. If a power user also entered **detailed** advance/bonus entries in the components dialog, the summary cell becomes read-only and shows the combined total (with a ✎ hint) so the figure always matches the export; the detailed entries remain editable in the dialog.
 - **Removed settings** (contractual daily hours, window offsets, rest-between-shifts) keep their engine fields defaulting to no-effect values, so historical data and calculations are unaffected — only the controls were removed.
+
+## Installer
+
+- `downloads/Hours-Cal_1.1.12_x64-setup.exe` (10.8 MiB, NSIS x64)
+- SHA-256: `19f03e6e667d57ef6f21c1cf34e06ef9eac1f0ba6fcea5ac77b6fb14753296f0`
+- Installer audit (`scripts/audit-installers.mjs`): passed — licence public key embedded, no owner-only programs or key material.
