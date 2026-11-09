@@ -129,3 +129,10 @@
 - `docs/samples/payroll-entry-sample-6-employees.pdf` – עמוד אחד
 - `docs/screenshots/1.1.14/pdf-38-1..3.png`, `pdf-6-1.png` – עמודי ה-PDF
 - `docs/screenshots/1.1.14/tooltip-review.png`, `tooltip-compliance.png` – חלונית אחת בכל פעם
+
+## Installer (1.1.14)
+
+- `downloads/Hours-Cal_1.1.14_x64-setup.exe` (10.8 MiB, NSIS x64), replaces 1.1.13
+- SHA-256: `7823f7563010033b9620b097af5d1efaa9df2b9b85200628e6793a93652a97be`
+- Installer audit (`scripts/audit-installers.mjs`): passed — licence public key embedded, no owner-only programs or key material.
+- Before build: `tsc` clean, unit tests 461 passed (2 skipped), e2e licensing / payroll-pdf / tooltips 8/8 passed.
